@@ -1,0 +1,47 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.kdbx
+.aws/
+.kube/
+.ssh/
+.config/gh/
+.netrc
+.npmrc
+.pypirc
+
+# Agent authentication, browser, HOME, and sessions
+.openab/
+.codex/
+.agent-browser/
+*.auth-state.json
+
+# Runtime state and generated output
+logs/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+.cache/
+runtime/
+evidence/
+tmp/
+.tmp/
+coverage/
+dist/
+node_modules/
+
+# Target repositories and isolated workspaces
+target-repositories/
+worktrees/
+
+# Local editor and operating-system state
+.DS_Store
+*.swp
+*~

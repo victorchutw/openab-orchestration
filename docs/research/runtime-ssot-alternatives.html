@@ -1,0 +1,1412 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="OpenAB operational SSOT alternatives research: a non-technical zh-TW guide with technical details and official sources.">
+  <title>OpenAB 執行狀態 SSOT 替代方案研究</title>
+  <style>
+    :root {
+      --ink: #17223b;
+      --muted: #526079;
+      --paper: #f7f5ef;
+      --surface: #ffffff;
+      --surface-2: #eef3f2;
+      --line: #cad4d2;
+      --brand: #116466;
+      --brand-deep: #0b4547;
+      --accent: #d67b23;
+      --good: #24764a;
+      --warn: #9b5b08;
+      --bad: #a33c36;
+      --info: #315a8d;
+      --shadow: 0 12px 34px rgba(23, 34, 59, 0.10);
+      --radius: 18px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
+        "PingFang TC", "Microsoft JhengHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 4%, rgba(17, 100, 102, 0.10), transparent 28rem),
+        linear-gradient(180deg, #fbfaf6 0, var(--paper) 36rem);
+      font-size: 17px;
+      line-height: 1.75;
+    }
+
+    a { color: var(--brand-deep); text-underline-offset: 0.18em; }
+    a:hover { color: var(--accent); }
+
+    a:focus-visible,
+    button:focus-visible,
+    select:focus-visible,
+    input:focus-visible,
+    summary:focus-visible {
+      outline: 3px solid rgba(214, 123, 35, 0.58);
+      outline-offset: 3px;
+    }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    code {
+      padding: 0.08em 0.32em;
+      border-radius: 0.3em;
+      background: rgba(49, 90, 141, 0.09);
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      padding: 1.1rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #16212d;
+      color: #eff8f5;
+      font-size: 0.84rem;
+      line-height: 1.55;
+    }
+
+    h1, h2, h3, h4 {
+      line-height: 1.25;
+      text-wrap: balance;
+    }
+
+    h1 { margin: 0.3rem 0 1rem; font-size: clamp(2.15rem, 6vw, 4.5rem); }
+    h2 { margin: 3.5rem 0 1rem; font-size: clamp(1.65rem, 3vw, 2.35rem); }
+    h3 { margin: 2.4rem 0 0.7rem; font-size: 1.35rem; }
+    h4 { margin: 1.5rem 0 0.45rem; font-size: 1.08rem; }
+
+    p, li { max-width: 78ch; }
+
+    .skip-link {
+      position: fixed;
+      z-index: 20;
+      top: 0.5rem;
+      left: 0.5rem;
+      transform: translateY(-150%);
+      padding: 0.6rem 0.9rem;
+      border-radius: 8px;
+      color: #fff;
+      background: var(--brand-deep);
+    }
+
+    .skip-link:focus { transform: none; }
+
+    .hero {
+      padding: clamp(2.5rem, 8vw, 6rem) 1.2rem 2.5rem;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .hero-inner, main, .footer-inner {
+      width: min(1180px, calc(100% - 2rem));
+      margin-inline: auto;
+    }
+
+    .eyebrow {
+      margin: 0;
+      color: var(--brand-deep);
+      font-weight: 750;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .lede {
+      max-width: 62ch;
+      margin: 0;
+      color: var(--muted);
+      font-size: clamp(1.08rem, 2.2vw, 1.35rem);
+    }
+
+    .meta, .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.55rem;
+      margin-top: 1.3rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 0.28rem 0.65rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.70);
+      color: var(--muted);
+      font-size: 0.83rem;
+      font-weight: 700;
+    }
+
+    .badge.good { border-color: rgba(36,118,74,.35); color: var(--good); }
+    .badge.warn { border-color: rgba(155,91,8,.35); color: var(--warn); }
+    .badge.bad { border-color: rgba(163,60,54,.35); color: var(--bad); }
+
+    .toc-wrap {
+      position: sticky;
+      z-index: 10;
+      top: 0;
+      border-bottom: 1px solid var(--line);
+      background: rgba(247, 245, 239, 0.94);
+      backdrop-filter: blur(12px);
+    }
+
+    .toc {
+      display: flex;
+      width: min(1180px, calc(100% - 2rem));
+      margin-inline: auto;
+      overflow-x: auto;
+      gap: 0.2rem;
+      padding: 0.5rem 0;
+      scrollbar-width: thin;
+    }
+
+    .toc a {
+      flex: 0 0 auto;
+      padding: 0.38rem 0.62rem;
+      border-radius: 7px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
+
+    .toc a:hover { background: var(--surface-2); color: var(--brand-deep); }
+
+    main { padding: 1.5rem 0 5rem; }
+
+    .callout, .decision, .note {
+      margin: 1.25rem 0;
+      padding: 1.1rem 1.25rem;
+      border: 1px solid var(--line);
+      border-left: 6px solid var(--brand);
+      border-radius: 12px;
+      background: var(--surface);
+      box-shadow: 0 4px 15px rgba(23,34,59,.04);
+    }
+
+    .callout.warn { border-left-color: var(--warn); }
+    .callout.danger { border-left-color: var(--bad); }
+    .callout.info { border-left-color: var(--info); }
+    .callout h3, .callout h4, .decision h3 { margin-top: 0; }
+    .callout > :last-child, .decision > :last-child { margin-bottom: 0; }
+
+    .verdict {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1rem;
+      margin: 1.5rem 0;
+    }
+
+    .verdict article, .card {
+      padding: 1.1rem;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .verdict h3, .card h3 { margin-top: 0; }
+
+    .scenario-panel, .filter-panel, .trigger-panel {
+      padding: 1.25rem;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-2);
+    }
+
+    .scenario-controls, .filter-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      gap: 0.65rem;
+      margin: 0.8rem 0 1rem;
+    }
+
+    button, select, input[type="search"] {
+      min-height: 2.65rem;
+      border: 1px solid #9badab;
+      border-radius: 9px;
+      background: var(--surface);
+      color: var(--ink);
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+      padding: 0.5rem 0.85rem;
+      font-weight: 750;
+    }
+
+    button[aria-pressed="true"] {
+      border-color: var(--brand);
+      background: var(--brand);
+      color: #fff;
+    }
+
+    select, input[type="search"] { padding: 0.45rem 0.65rem; }
+
+    label.control {
+      display: grid;
+      gap: 0.2rem;
+      color: var(--muted);
+      font-size: 0.84rem;
+      font-weight: 700;
+    }
+
+    .scenario-result {
+      padding: 0.9rem 1rem;
+      border-radius: 10px;
+      background: var(--surface);
+    }
+
+    .scenario-result h3 { margin-top: 0; }
+    .js-enabled .scenario-result:not(.is-active) { display: none; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+
+    .option-card { position: relative; }
+    .option-card[data-hidden="true"] { display: none; }
+    .option-card.recommended { border: 2px solid var(--good); }
+    .option-card.conditional { border-top: 5px solid var(--warn); }
+    .option-card.excluded { border-top: 5px solid var(--bad); }
+
+    .tier {
+      display: inline-block;
+      margin-bottom: 0.7rem;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 800;
+    }
+
+    .recommended .tier { background: rgba(36,118,74,.12); color: var(--good); }
+    .conditional .tier { background: rgba(155,91,8,.12); color: var(--warn); }
+    .excluded .tier { background: rgba(163,60,54,.12); color: var(--bad); }
+
+    .table-scroll {
+      overflow-x: auto;
+      margin: 1rem 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    th, td {
+      padding: 0.72rem 0.75rem;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--surface-2);
+      color: var(--brand-deep);
+      font-weight: 800;
+    }
+
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr[data-hidden="true"] { display: none; }
+    .fit-strong { color: var(--good); font-weight: 750; }
+    .fit-weak { color: var(--bad); font-weight: 750; }
+
+    details {
+      margin: 0.8rem 0;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 0.8rem 1rem;
+      color: var(--brand-deep);
+      font-weight: 800;
+    }
+
+    details > div, details > p, details > ul, details > ol, details > table {
+      margin: 0;
+      padding: 0 1rem 1rem;
+    }
+
+    details[open] summary { border-bottom: 1px solid var(--line); }
+
+    .glossary {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.7rem;
+    }
+
+    .glossary details { margin: 0; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.65rem;
+      margin: 1.2rem 0;
+      counter-reset: flow;
+    }
+
+    .flow > div {
+      position: relative;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--surface);
+    }
+
+    .flow > div::before {
+      counter-increment: flow;
+      content: counter(flow);
+      display: inline-grid;
+      width: 1.8rem;
+      height: 1.8rem;
+      margin-bottom: 0.5rem;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--brand);
+      color: #fff;
+      font-weight: 800;
+    }
+
+    .flow h3, .flow h4 { margin: 0.25rem 0; }
+
+    .checklist {
+      display: grid;
+      gap: 0.55rem;
+      padding: 0;
+      list-style: none;
+    }
+
+    .checklist li {
+      padding-left: 1.7rem;
+      position: relative;
+    }
+
+    .checklist li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: var(--good);
+      font-weight: 900;
+    }
+
+    .trigger-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.55rem 1rem;
+      padding: 0;
+      list-style: none;
+    }
+
+    .trigger-list label {
+      display: flex;
+      gap: 0.55rem;
+      align-items: start;
+      padding: 0.65rem;
+      border-radius: 8px;
+      background: var(--surface);
+    }
+
+    .trigger-list input { margin-top: 0.4rem; }
+
+    .trigger-output {
+      min-height: 3rem;
+      margin-top: 1rem;
+      padding: 0.75rem 0.9rem;
+      border-left: 5px solid var(--info);
+      background: var(--surface);
+      font-weight: 700;
+    }
+
+    .citation-list { columns: 2; column-gap: 2.5rem; }
+    .citation-list li { break-inside: avoid; margin-bottom: 0.55rem; }
+
+    .small { color: var(--muted); font-size: 0.88rem; }
+    .nowrap { white-space: nowrap; }
+    .hidden-count { margin-left: auto; color: var(--muted); font-size: 0.9rem; }
+
+    footer {
+      padding: 2rem 0;
+      border-top: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--muted);
+    }
+
+    @media (max-width: 820px) {
+      body { font-size: 16px; }
+      .verdict, .grid, .glossary, .trigger-list { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr 1fr; }
+      .citation-list { columns: 1; }
+    }
+
+    @media (max-width: 520px) {
+      .hero-inner, main, .footer-inner, .toc { width: min(100% - 1.1rem, 1180px); }
+      .flow { grid-template-columns: 1fr; }
+      .scenario-controls button { flex: 1 1 100%; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --ink: #e8efed;
+        --muted: #b7c4c2;
+        --paper: #111a20;
+        --surface: #17232b;
+        --surface-2: #1d2c34;
+        --line: #3d5056;
+        --brand: #58b8b0;
+        --brand-deep: #86d5ce;
+        --accent: #f0a556;
+        --good: #7bd09b;
+        --warn: #f1bb68;
+        --bad: #ef8d85;
+        --info: #8bb6e9;
+        --shadow: 0 12px 34px rgba(0,0,0,.24);
+      }
+      body { background: radial-gradient(circle at 8% 4%, rgba(88,184,176,.10), transparent 28rem), var(--paper); }
+      .badge { background: rgba(23,35,43,.72); }
+      .toc-wrap { background: rgba(17,26,32,.94); }
+      pre { background: #091116; }
+      button[aria-pressed="true"] { color: #081516; }
+    }
+
+    @media print {
+      :root {
+        --ink: #000;
+        --muted: #333;
+        --paper: #fff;
+        --surface: #fff;
+        --surface-2: #f2f2f2;
+        --line: #999;
+      }
+      body { background: #fff; font-size: 10.5pt; line-height: 1.45; }
+      .hero { padding: 0 0 1rem; }
+      .hero-inner, main, .footer-inner { width: 100%; }
+      .toc-wrap, .scenario-controls, .filter-controls, .trigger-panel input,
+      .trigger-output, .skip-link, noscript { display: none !important; }
+      .js-enabled .scenario-result:not(.is-active),
+      .option-card[data-hidden="true"] { display: block !important; }
+      tbody tr[data-hidden="true"] { display: table-row !important; }
+      .grid { display: block; }
+      .card, .callout, .decision, .scenario-panel, .filter-panel, details {
+        break-inside: avoid;
+        box-shadow: none;
+      }
+      .card { margin: 0.7rem 0; }
+      details:not([open]) > *:not(summary) { display: block !important; }
+      a { color: #000; text-decoration: underline; }
+      a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 8pt; overflow-wrap: anywhere; }
+      h2 { break-before: page; }
+      h2:first-of-type { break-before: auto; }
+      pre { white-space: pre-wrap; color: #000; background: #fff; }
+      footer { background: #fff; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳至主要內容</a>
+
+  <header class="hero">
+    <div class="hero-inner">
+      <p class="eyebrow">OpenAB 架構研究 · 非技術讀者版</p>
+      <h1>什麼可以取代 Git／GitHub，成為執行狀態的 SSOT？</h1>
+      <p class="lede">答案不是「把 Git 丟掉」，而是把產品原始碼與機器執行狀態分家。這份文件比較純檔案、SQLite、PostgreSQL、rqlite、etcd、NATS、Kubernetes CRD、Temporal 等方案，並說明現在為什麼建議先用 host-local SQLite。</p>
+      <div class="meta" aria-label="文件資訊">
+        <span class="badge">研究日期：2026-08-07</span>
+        <span class="badge good">建議：SQLite（單機 MVP）</span>
+        <span class="badge warn">未授權實作／遷移／live canary</span>
+        <a class="badge" href="runtime-ssot-alternatives.md">英文 raw research（Markdown）</a>
+      </div>
+    </div>
+  </header>
+
+  <nav class="toc-wrap" aria-label="本頁導覽">
+    <div class="toc">
+      <a href="#answer">先看答案</a>
+      <a href="#scenario">依情境選擇</a>
+      <a href="#terms">名詞解釋</a>
+      <a href="#boundary">SSOT 分界</a>
+      <a href="#compare">方案比較</a>
+      <a href="#architecture">建議架構</a>
+      <a href="#effects">外部動作風險</a>
+      <a href="#cutover">遷移方式</a>
+      <a href="#triggers">升級門檻</a>
+      <a href="#validation">驗證計畫</a>
+      <a href="#sources">官方來源</a>
+    </div>
+  </nav>
+
+  <main id="main">
+    <section id="answer" aria-labelledby="answer-title">
+      <h2 id="answer-title">先看答案</h2>
+
+      <div class="callout">
+        <h3>遷移說明：這是研究資料，不是新 repo 已接受的架構</h3>
+        <p>本文提到的「目前 repo」、舊 ADR、registry 與 GitHub authority 都是在描述 legacy system。它們沒有隨文件自動成為新架構限制；詳見 <a href="../legacy/provenance.md">legacy provenance</a>。</p>
+      </div>
+
+      <div class="callout">
+        <h3>可以，輕量 local DB 能解決目前 SSOT 的核心問題；但前提是同時改變「誰有權寫入」。</h3>
+        <p>若 SQLite 與 GitHub comment 都可以把同一個 run 推進到下一個狀態，就仍然有兩套真相。正確做法是：新 run 只由本機控制服務寫 SQLite；GitHub 最多接收單向、去敏感化的顯示摘要，不能再被讀回來決定狀態。</p>
+      </div>
+
+      <div class="verdict">
+        <article>
+          <span class="tier">現在</span>
+          <h3>host-local SQLite</h3>
+          <p>一個 <code>openab-control</code> 服務、一個本機狀態路徑、一個寫入者。狀態、稽核事件及待執行外部動作可以在同一筆 transaction 內一起成功或一起失敗。</p>
+        </article>
+        <article>
+          <span class="tier">繼續保留</span>
+          <h3>Public Git 管產品</h3>
+          <p>Git 繼續保存程式碼、預設政策、schema、migration 與 release。安裝好的 binary/config 釘住版本；每次 transition 不查 Git、GitHub Issue，也不等 GitHub Action。</p>
+        </article>
+        <article>
+          <span class="tier">未來有條件升級</span>
+          <h3>PostgreSQL／Temporal</h3>
+          <p>真正需要跨主機、HA 或 PITR 時再評估 PostgreSQL；當長時間 workflow、timer、retry 與 resume 邏輯成為主要複雜度，才評估 Temporal。</p>
+        </article>
+      </div>
+
+      <p>SQLite 適合本案，因為它是 in-process、serverless 的本機資料庫，具 ACID transaction 與當機復原能力，但同一時間只有一個 writer；這剛好符合單人 MVP 的序列化控制服務，而不是多節點控制平面。官方依據：<a href="https://sqlite.org/whentouse.html">SQLite Appropriate Uses</a>、<a href="https://sqlite.org/transactional.html">SQLite Is Transactional</a>。</p>
+
+      <div class="callout warn">
+        <h3>有一個比 SQLite 更小的合理方案</h3>
+        <p>若 MVP 被刻意縮成「一次只有一個 active run、只有一個 writer、所有權威狀態可放進一份很小的 canonical JSON、沒有獨立 audit/outbox 查詢」，那麼用 temporary file＋sync＋同檔案系統 rename 原子替換整份 JSON，可能比 SQLite 更小。可是 OpenAB 現有的 reviewer execution、健康狀態期限、外部 effect reconciliation 與 audit 需求，已很接近需要 SQLite 的界線。<a href="https://pkg.go.dev/os">Go <code>os</code> 官方文件</a>說明 <code>File.Sync</code> 與 <code>Rename</code>，但不替應用程式提供跨多筆紀錄的 transaction。</p>
+      </div>
+    </section>
+
+    <section id="scenario" aria-labelledby="scenario-title">
+      <h2 id="scenario-title">依你的情境看建議</h2>
+      <div class="scenario-panel">
+        <p>選擇目前最在意的情境。這只改變畫面上的建議摘要，不會儲存或傳送任何資料。</p>
+        <div class="scenario-controls" role="group" aria-label="情境選擇">
+          <button type="button" data-scenario-button="mvp" aria-pressed="true">單人 MVP</button>
+          <button type="button" data-scenario-button="ha" aria-pressed="false">未來跨機器／HA</button>
+          <button type="button" data-scenario-button="ops" aria-pressed="false">最低維運</button>
+        </div>
+
+        <div class="scenario-result is-active" data-scenario-result="mvp" aria-live="polite">
+          <h3>單人 MVP：SQLite 是主要建議</h3>
+          <p>它直接移除 GitHub runner 等待，又能把 run、reviewer、audit 與 effect intent 放在同一筆 transaction。優先部署成同一台主機上的一般服務，不必先依賴 k3s。只有在「嚴格一次一個 run」的更窄原型，canonical JSON snapshot 才可能勝出。</p>
+        </div>
+        <div class="scenario-result" data-scenario-result="ha">
+          <h3>跨機器或 HA：先看 PostgreSQL</h3>
+          <p>一旦需要多個 writer host、主機故障後自動繼續，或有明確 PITR/RTO/RPO 目標，SQLite 不應靠共享網路磁碟硬撐。一般先評估 PostgreSQL；只有明確偏好 SQLite SQL＋HTTP＋Raft，並能操作三台獨立 failure host 時，才比較 rqlite。</p>
+        </div>
+        <div class="scenario-result" data-scenario-result="ops">
+          <h3>最低維運：先縮需求，再選檔案或 SQLite</h3>
+          <p>最少元件是單一 canonical JSON snapshot，但它只能服務非常窄的狀態模型。一旦要 audit history、outbox、跨 run 查詢或多項 health observation，SQLite 反而是較少「自己造資料庫」的低維運方案。不要為了聽起來正式而先上三節點 consensus system。</p>
+        </div>
+        <noscript><p class="small">JavaScript 未啟用：上面三種情境仍全部可讀；只有自動切換與篩選功能停用。</p></noscript>
+      </div>
+    </section>
+
+    <section id="terms" aria-labelledby="terms-title">
+      <h2 id="terms-title">先把技術名詞翻成白話</h2>
+      <p>點開每一項即可閱讀。這些名詞也會在後面的比較中出現。</p>
+      <div class="glossary">
+        <details>
+          <summary>SSOT（Single Source of Truth）</summary>
+          <div><p>「唯一真相來源」不是指所有資料都必須塞在同一個地方，而是每一類資料只能有一個地方有權決定它。程式碼可以由 Git 決定，run 狀態由 SQLite 決定，secret 由 OS 或 Kubernetes Secret 決定；重點是同一類資料不要有兩個 writer。</p></div>
+        </details>
+        <details>
+          <summary>VCS、Git 與 operational hot path</summary>
+          <div><p>VCS 是版本控制系統，Git 很擅長保存程式碼與版本歷史。operational hot path 是每次 run 要往前走時必經的路徑。建議架構仍用 Git，但 transition 不再 commit/push、查 Issue comment 或等待 Action。</p></div>
+        </details>
+        <details>
+          <summary>Transaction 與 ACID</summary>
+          <div><p>Transaction 可以把數個資料變更綁成一組：全部成功，或全部不算。例如同時更新 run 狀態、追加 audit event、建立待送出的 effect。ACID 是描述這類可靠性的四個性質縮寫；本文件最在意 atomicity（不可半套）與 durability（已確認的資料在規定故障下能留下）。</p></div>
+        </details>
+        <details>
+          <summary>Journal、WAL 與 fsync</summary>
+          <div><p>它們是把變更安全落到磁碟的機制。SQLite rollback journal 先保存可復原資訊；WAL（write-ahead log）先把變更寫入另一份 log。<code>fsync</code> 要求作業系統把暫存寫入送往穩定儲存。不同設定會交換速度與斷電時可保留的最新資料量。</p></div>
+        </details>
+        <details>
+          <summary>Outbox、idempotency 與 UNCERTAIN</summary>
+          <div><p>Outbox 先把「準備呼叫外部服務」的意圖跟狀態一起存好，再到 transaction 外呼叫。Idempotency key 讓重試同一件事不重複產生效果。如果遠端可能成功、但本機尚未收到確認就當機，狀態應標成 <code>UNCERTAIN</code>，先查證而不是盲目重送。</p></div>
+        </details>
+        <details>
+          <summary>HA、RTO 與 RPO</summary>
+          <div><p>HA 是高可用。RTO 是故障後允許多久恢復；RPO 是最多允許遺失多久以前之後的資料。例如 RTO 15 分鐘代表希望 15 分鐘內恢復，RPO 5 分鐘代表最多接受遺失最近 5 分鐘資料。這些應先由需求決定，不能由資料庫名稱自動保證。</p></div>
+        </details>
+        <details>
+          <summary>Raft、quorum 與 linearizable</summary>
+          <div><p>Raft 是多節點共識演算法。Quorum 是必須同意的多數，例如三台通常要兩台。Linearizable 可以白話理解為每次讀寫看起來像依單一時間順序發生，不會在需要最新值時偷偷讀到舊 leader 的資料；代價是網路與共識延遲。</p></div>
+        </details>
+        <details>
+          <summary>JSONL、CRD 與 PITR</summary>
+          <div><p>JSONL 是一行一筆 JSON，適合匯出事件。CRD 是自訂 Kubernetes API 物件。PITR（point-in-time recovery）是把資料庫復原到某個時間點。三者用途不同：JSONL 適合 evidence、CRD 適合小型 declarative state、PITR 是 PostgreSQL 等資料庫的復原能力。</p></div>
+        </details>
+      </div>
+    </section>
+
+    <section id="boundary" aria-labelledby="boundary-title">
+      <h2 id="boundary-title">SSOT 應按資料類別分界</h2>
+      <p>不必追求一個 store 包辦所有事情。以下分工讓每一類資料只有一個 authority，同時避免把 private runtime data 放進未來要公開的 source repo。</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>資料類別</th><th>唯一 authority</th><th>內容範例</th><th>無法使用時</th></tr></thead>
+          <tbody>
+            <tr><td>產品原始碼與 release</td><td>Public Git commit/tag</td><td>Go 程式碼、預設 policy、schema、migration、公開範例設定</td><td>新 build/release 停止；已安裝且釘住 revision 的 runtime 可依政策繼續</td></tr>
+            <tr><td>安裝環境設定</td><td>Checkout 外的 private host-local config</td><td>固定 broker roster、provider route、部署 identity、allowlist、非 secret 參照</td><td>啟動或明確 reload 失敗；已載入的 immutable snapshot 可依政策繼續</td></tr>
+            <tr><td>執行狀態</td><td>只由 <code>openab-control</code> 寫入的 SQLite</td><td>run/reviewer state、health observation、idempotency、effect、report、audit event</td><td>停止新 transition；不改回 GitHub 寫入</td></tr>
+            <tr><td>Evidence</td><td>Checkout 外的 immutable per-run bundle</td><td>raw response、report、manifest、checksum、source/target revision</td><td>缺少必要 evidence 時不可宣告完整；active state 仍由 DB 判定</td></tr>
+            <tr><td>目標原始碼</td><td>Target Git repository 與 immutable commit ID</td><td>base/head commit、PR、native checks</td><td>無法驗證 target，run 不應前進</td></tr>
+            <tr><td>Secret</td><td>OS credential store 或 Kubernetes Secret</td><td>GitHub／Discord／provider token、private key</td><td>相關外部 effect 停止；值不進 Git、SQLite 或 evidence</td></tr>
+            <tr><td>人看的畫面</td><td>CLI/UI 與可選 GitHub 摘要是 projection</td><td>狀態、連結、去敏感化結果</td><td>不影響 runtime authority</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout info">
+        <h3>明確回答：Git 不再位於 operational hot path</h3>
+        <p>Binary 與 installation config 在 build、deploy 或「明確 reload」時釘住 revision/digest。一般 transition 只讀 SQLite 與已載入的 config，不會每次 <code>git fetch</code>、讀 GitHub Issue、等待 Action 或把 runtime event commit 回 repo。需要 runtime enable/disable/quarantine 時，才啟用 DB 內 optional <code>broker_runtime_states</code>；若第一版固定 roster，則 roster 變更要重新啟動，明確 defer hot administration。</p>
+      </div>
+
+      <h3>Public repo 前還有一個獨立 prerequisite</h3>
+      <p>Legacy <code>registry/brokers.v1.json</code>（未遷移，見 <a href="../legacy/provenance.md">legacy provenance</a>）含部署專屬的欄位類型，例如 Discord bot/channel ID、Kubernetes namespace/runtime identity、image digest、PVC/workspace reference、secret reference name 與 target repo ID；本文件不重印實際值。公開前應把這類 registry 移至 private installation boundary，public repo 只留 schema 與去識別範例。</p>
+      <p>但移除檔案只保護未來。GitHub 官方提醒：private repo 轉 public 後，程式碼、活動，以及 Actions 歷史與 log 都會公開。因此仍須另外稽核 Git history、fork、Actions log/artifact 與過往 secret exposure；若無法可靠清理，可能要建立乾淨的 public repo。這次研究不會自動執行公開或清理歷史。來源：<a href="https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/setting-repository-visibility">GitHub Setting repository visibility</a>、<a href="https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository">GitHub Actions repository settings</a>。</p>
+
+      <h3>為什麼這是 architecture change</h3>
+      <p>Legacy repo 的決策是 GitHub 擁有 Development Work Item state，gate-owned Issue comment 是 authoritative snapshot，並拒絕另一個會競爭 authority 的 DB。那些 ADR 沒有遷移，也不在本 repo 自動生效；見 <a href="../legacy/provenance.md">legacy provenance</a>。所以若在 legacy system 採用建議，需要另寫 superseding ADR；在本 greenfield repo 則必須由 Wayfinder 重新決定。</p>
+    </section>
+
+    <section id="compare" aria-labelledby="compare-title">
+      <h2 id="compare-title">方案全景、推薦層級與比較矩陣</h2>
+      <p>這是「對 OpenAB 現況的適合度」排名，不是產品品質排行榜。被排除為 primary SSOT 的產品，仍可能在自己擅長的角色很好用。</p>
+
+      <div class="filter-panel">
+        <h3>篩選方案</h3>
+        <div class="filter-controls">
+          <label class="control">推薦層級
+            <select id="tier-filter">
+              <option value="all">全部</option>
+              <option value="recommended">現在推薦</option>
+              <option value="conditional">有條件評估</option>
+              <option value="support">輔助角色</option>
+              <option value="excluded">不作 primary SSOT</option>
+            </select>
+          </label>
+          <label class="control">搜尋名稱或特性
+            <input id="solution-search" type="search" placeholder="例如：HA、SQLite、audit">
+          </label>
+          <button id="reset-filter" type="button">清除篩選</button>
+          <span class="hidden-count" id="filter-count" aria-live="polite"></span>
+        </div>
+        <noscript><p class="small">JavaScript 未啟用：所有方案仍完整顯示。</p></noscript>
+      </div>
+
+      <h3>排名摘要</h3>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>順位</th><th>方案</th><th>現在的判斷</th><th>何時重新考慮</th></tr></thead>
+          <tbody>
+            <tr data-option-row data-tier="recommended" data-search="sqlite local database mvp low ops"><td>1</td><td><strong>SQLite</strong></td><td>現在推薦：交易、關聯限制、audit/outbox 與低維運的平衡最好</td><td>跨 host writer、HA、PITR 或復原目標觸發時轉 PostgreSQL</td></tr>
+            <tr data-option-row data-tier="conditional" data-search="json canonical snapshot file minimal"><td>2</td><td>Canonical JSON snapshot</td><td>極窄 MVP 的最小替代方案</td><td>兩個 run、獨立 audit/outbox、query 或複雜 migration 出現時轉 SQLite</td></tr>
+            <tr data-option-row data-tier="conditional" data-search="postgresql postgres ha multi machine pitr"><td>3</td><td>PostgreSQL</td><td>條件式下一代架構</td><td>多主機、host-independent RTO/RPO、HA 或 PITR 成為真需求</td></tr>
+            <tr data-option-row data-tier="conditional" data-search="rqlite raft sqlite http ha quorum"><td>4</td><td>rqlite</td><td>特定的 SQLite＋HTTP＋Raft HA bridge</td><td>有三個獨立 failure host、能操作 quorum，且特別需要這個組合</td></tr>
+            <tr data-option-row data-tier="conditional" data-search="temporal workflow durable retry timer resume"><td>5</td><td>Temporal</td><td>條件式 workflow layer，不是輕量 DB 替代品</td><td>長時間 timer/retry/resume 成為主要複雜度</td></tr>
+            <tr data-option-row data-tier="conditional" data-search="bbolt go embedded kv"><td>6</td><td>bbolt</td><td>SQLite driver build gate 失敗時的窄 fallback</td><td>願意永久單 daemon 且關聯/query 由程式負責</td></tr>
+            <tr data-option-row data-tier="support" data-search="etcd distributed kv coordination lease watch"><td>7</td><td>etcd</td><td>分散式協調 metadata，不作應用資料庫</td><td>已有受支援三節點 etcd，問題變成 compare/watch/lease</td></tr>
+            <tr data-option-row data-tier="support" data-search="nats jetstream event log stream transport replay"><td>8</td><td>NATS JetStream</td><td>訊息 transport／event distribution</td><td>兩個以上獨立 consumer 需要 durable fan-out/replay；DB 仍是 authority</td></tr>
+            <tr data-option-row data-tier="support" data-search="git local gate private repository bridge public"><td>9</td><td>Local Git gate</td><td>可作短期 bridge，不是目標架構</td><td>只想先量測 hosted runner 延遲，且接受另一個 private runtime repo</td></tr>
+            <tr data-option-row data-tier="excluded" data-search="kubernetes crd k3s api application data"><td>10</td><td>Kubernetes API／CRD</td><td>排除作 application run data SSOT</td><td>僅限少量、低頻、declarative Kubernetes desired state</td></tr>
+            <tr data-option-row data-tier="excluded" data-search="object store s3 redis cache evidence backup"><td>11</td><td>Object store／Redis</td><td>Evidence／backup 或 disposable cache；不作 primary authority</td><td>出現各自專門角色時加入，但不成為第二個 writer</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>能力比較</h3>
+      <p class="small">「強／足夠／弱」是根據各官方文件做出的本案適合度判斷；不是官方替自己打的分數。External effect 一欄全部都需要 idempotency/reconciliation，因為資料庫無法與 Discord/provider API 共用一筆 transaction。</p>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>方案</th><th>單人 MVP</th><th>去除 hosted wait</th><th>多實體 atomicity</th><th>Backup／recovery</th><th>跨機器／HA</th><th>維運成本</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Canonical JSON</td><td class="fit-strong">嚴格 scope 下強</td><td class="fit-strong">強</td><td>只有整份單一文件時足夠</td><td>應用程式自訂 protocol</td><td class="fit-weak">弱</td><td>起初最低</td></tr>
+            <tr><td>JSONL＋projection</td><td class="fit-weak">弱</td><td class="fit-strong">強</td><td class="fit-weak">需自製 protocol</td><td>需自製 repair/snapshot</td><td class="fit-weak">弱</td><td>由低快速升高</td></tr>
+            <tr><td><strong>SQLite</strong></td><td class="fit-strong">強</td><td class="fit-strong">強</td><td class="fit-strong">強</td><td class="fit-strong">單 host 強，需 off-host backup</td><td class="fit-weak">弱</td><td class="fit-strong">低</td></tr>
+            <tr><td>bbolt</td><td>足夠</td><td class="fit-strong">強</td><td>KV transaction 強，關聯規則自管</td><td>足夠</td><td class="fit-weak">弱</td><td>低</td></tr>
+            <tr><td>PostgreSQL</td><td>足夠但偏重</td><td class="fit-strong">強</td><td class="fit-strong">強</td><td class="fit-strong">強，可選 PITR</td><td class="fit-strong">設定正確時強</td><td>Managed 中；self-host HA 高</td></tr>
+            <tr><td>rqlite</td><td class="fit-weak">現在偏重</td><td class="fit-strong">強</td><td class="fit-strong">SQL request/transaction 強</td><td>足夠，另有 cluster recovery</td><td class="fit-strong">有 quorum 時強</td><td>中高</td></tr>
+            <tr><td>etcd</td><td class="fit-weak">弱</td><td class="fit-strong">強</td><td>KV compare transaction 強</td><td>Snapshot＋cluster procedure</td><td class="fit-strong">有 quorum 時強</td><td>本案高</td></tr>
+            <tr><td>NATS JetStream</td><td class="fit-weak">作 authority 弱</td><td class="fit-strong">強</td><td class="fit-weak">沒有多操作 atomic batch</td><td>Stream-specific</td><td>可 quorum replication</td><td>中高</td></tr>
+            <tr><td>Kubernetes CRD</td><td class="fit-weak">弱</td><td class="fit-strong">強</td><td class="fit-weak">無跨 object transaction</td><td>綁定 cluster datastore</td><td>綁定 control-plane HA</td><td>中，且擴大 blast radius</td></tr>
+            <tr><td>Temporal</td><td class="fit-weak">第一步偏重</td><td class="fit-strong">強</td><td>Workflow state durable；Activity 仍外部</td><td>依賴 Temporal service＋persistence</td><td>正確部署／managed 時強</td><td>現在高</td></tr>
+            <tr><td>Object store</td><td class="fit-weak">弱</td><td class="fit-strong">強</td><td class="fit-weak">單 key atomic，非整個 run model</td><td class="fit-strong">immutable object 強</td><td>依 provider</td><td>中</td></tr>
+            <tr><td>Redis</td><td>作 cache 足夠；作 truth 弱</td><td class="fit-strong">強</td><td>Command 可序列，但 transaction 不 rollback</td><td>Data-loss window 依 policy</td><td>Async replication caveat</td><td>中</td></tr>
+            <tr><td>Local Git gate</td><td>作 bridge 足夠</td><td>只移除 hosted queue</td><td>Commit snapshot；remote effect 仍分離</td><td>Clone 有助備份</td><td>Ref/merge 不是 DB HA</td><td>Commit/push ceremony 仍在</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid" id="option-grid">
+        <article class="card option-card recommended" data-option-card data-tier="recommended" data-search="sqlite local database mvp transaction audit outbox low ops">
+          <span class="tier">現在推薦 · #1</span>
+          <h3>SQLite</h3>
+          <p>一個檔案、in-process、無資料庫伺服器，但具 transaction、foreign key、index、query、backup API 與 crash recovery。最適合一個 local controller writer。</p>
+          <details>
+            <summary>技術細節與限制</summary>
+            <div>
+              <ul>
+                <li>多 reader、同時一個 writer：<a href="https://sqlite.org/lang_transaction.html">SQLite transaction/concurrency</a>。</li>
+                <li>Rollback journal 可在 hot journal 復原：<a href="https://sqlite.org/lockingv3.html#hot_journals">SQLite locking and recovery</a>。</li>
+                <li>網路檔案系統的 locking/sync 可能不可靠，不應用 NFS/SMB/RWX share：<a href="https://sqlite.org/useovernet.html">SQLite over a network</a>。</li>
+                <li>Online Backup API 或 <code>VACUUM INTO</code> 可建立一致 snapshot：<a href="https://sqlite.org/backup.html">SQLite Backup API</a>。</li>
+                <li>它不提供 multi-host consensus，也不能跟外部 API 共用 transaction。</li>
+              </ul>
+            </div>
+          </details>
+        </article>
+
+        <article class="card option-card conditional" data-option-card data-tier="conditional" data-search="canonical json snapshot file minimal one run atomic rename">
+          <span class="tier">極窄 MVP 可選 · #2</span>
+          <h3>單一 canonical JSON snapshot</h3>
+          <p>單 writer 每次替換整份權威文件。若一次只有一個小 run，它比任何 DB 都少一層 dependency。</p>
+          <details>
+            <summary>何時真的勝過 SQLite？</summary>
+            <div>
+              <p>必須同時符合：一個 active run、整份 state 很小、effect intent 也在同一份文件、無獨立 audit retention、無 filtered query，且實測 temporary file＋<code>File.Sync</code>＋same-filesystem rename＋directory sync 的故障行為。</p>
+              <p>只要需要第二份必須同步的檔案、兩個 run、audit/outbox history、index、compaction 或 log repair，就應升級 SQLite。來源：<a href="https://pkg.go.dev/os">Go <code>os</code></a>。</p>
+            </div>
+          </details>
+        </article>
+
+        <article class="card option-card" data-option-card data-tier="support" data-search="jsonl append event log projection evidence export">
+          <span class="tier">Evidence 格式</span>
+          <h3>JSONL event log＋projection</h3>
+          <p>一行一筆很容易閱讀與交換，適合 terminal evidence；但若當 primary store，程式要自己做 partial-record recovery、projection rebuild、snapshot、compaction、upcast 與 outbox 一致性。</p>
+          <details>
+            <summary>為什麼不是「更輕的 DB」？</summary>
+            <div><p>Go 的 JSON encoder 可以逐筆寫入換行 JSON，<code>File.Sync</code> 可要求同步，但 portable locking、multi-record transaction、projection atomicity 與 recovery 都要由 OpenAB 定義。來源：<a href="https://pkg.go.dev/encoding/json#Encoder.Encode">Go JSON Encoder</a>、<a href="https://pkg.go.dev/os#File.Sync">Go File.Sync</a>。</p></div>
+          </details>
+        </article>
+
+        <article class="card option-card conditional" data-option-card data-tier="conditional" data-search="bbolt go embedded kv fallback build driver">
+          <span class="tier">窄 fallback · #6</span>
+          <h3>bbolt</h3>
+          <p>Go-native embedded KV，具 serializable ACID transaction，一個 write transaction 搭配多個 read transaction；但一般開啟方式會取得 exclusive file lock，跨 process 操作不方便。</p>
+          <details>
+            <summary>為何排在 SQLite 後面？</summary>
+            <div>
+              <p>OpenAB 有 run、reviewer、effect、artifact、event 之間的關聯與 unique binding，SQL constraint/query 比自行維護 bucket/index 更直接。bbolt 仍可在 SQLite driver 超過 build budget 時做 bounded comparison。</p>
+              <p>官方細節：<a href="https://github.com/etcd-io/bbolt#transactions">transaction</a>、<a href="https://github.com/etcd-io/bbolt#opening-a-database">exclusive open/file lock</a>、<a href="https://github.com/etcd-io/bbolt#database-backups">consistent backup</a>，以及包含 endian-specific on-disk layout 的 <a href="https://github.com/etcd-io/bbolt#caveats--limitations">caveat</a>。</p>
+            </div>
+          </details>
+        </article>
+
+        <article class="card option-card conditional" data-option-card data-tier="conditional" data-search="postgresql postgres ha multi machine pitr backup managed self hosted">
+          <span class="tier">條件式下一步 · #3</span>
+          <h3>PostgreSQL（self-managed／managed）</h3>
+          <p>Transaction、constraint、MVCC、WAL、online backup 與 PITR 的成熟 client/server 路徑。Managed 與 self-managed 是同一資料庫架構類別；差別是誰負責 patch、backup、replica 與 failover。</p>
+          <details>
+            <summary>可靠性與成本細節</summary>
+            <div>
+              <p>PostgreSQL transaction 可把多個變更一起 commit/rollback：<a href="https://www.postgresql.org/docs/current/tutorial-transactions.html">Transactions</a>；MVCC 讓讀寫較少互相阻塞：<a href="https://www.postgresql.org/docs/current/mvcc-intro.html">MVCC</a>。</p>
+              <p>Base backup＋archived WAL 可做 PITR，但需要 retention、restore procedure 與監控：<a href="https://www.postgresql.org/docs/current/continuous-archiving.html">Continuous Archiving/PITR</a>。Streaming replication 預設 asynchronous，primary 故障時可能遺失尚未到 standby 的 commit；synchronous replication 增加等待：<a href="https://www.postgresql.org/docs/current/warm-standby.html">Warm Standby</a>。</p>
+            </div>
+          </details>
+        </article>
+
+        <article class="card option-card conditional" data-option-card data-tier="conditional" data-search="rqlite sqlite raft http quorum ha distributed relational">
+          <span class="tier">特殊 HA bridge · #4</span>
+          <h3>rqlite</h3>
+          <p>透過 HTTP 提供 SQLite-backed relational DB，所有 write 經 Raft/quorum；三個 voting node 可容忍一個故障。</p>
+          <details>
+            <summary>為什麼不是免費的 HA？</summary>
+            <div><p>要操作 membership、quorum、snapshot 與 loss-of-quorum recovery，network latency 也進入 write path。預設 <code>weak</code> read 在 leader 變動時可能短暫 stale；安全決策需明確選 <code>linearizable</code>。來源：<a href="https://rqlite.io/docs/api/api/">rqlite API/Raft writes</a>、<a href="https://rqlite.io/docs/api/read-consistency/">Read Consistency</a>、<a href="https://rqlite.io/docs/clustering/general-guidelines/">Cluster Guidelines</a>。</p></div>
+          </details>
+        </article>
+      </div>
+    </section>
+
+    <section id="deep-dives" aria-labelledby="deep-dives-title">
+      <h2 id="deep-dives-title">其他候選：適合的角色與淘汰理由</h2>
+      <div class="grid">
+        <article class="card option-card" data-option-card data-tier="support" data-search="etcd distributed kv coordination raft quorum watch lease linearizable">
+          <span class="tier">協調 metadata · #7</span>
+          <h3>etcd</h3>
+          <p>預設 linearizable read、全域 revision、watch、lease，以及 atomic compare/then/else transaction，很適合分散式 lock、leader election 與少量 control-plane metadata。</p>
+          <details>
+            <summary>為何不作 OpenAB run database？</summary>
+            <div><p>Relational constraint、ad-hoc report 與長期 audit query 都要自行建模；history 會 compaction。Snapshot、defrag、quorum recovery、disk latency 與 membership 都是維運責任。對一個 local writer 再開一套 consensus system，風險大於收益。來源：<a href="https://etcd.io/docs/v3.7/learning/api/">etcd v3.7 API</a>、<a href="https://etcd.io/docs/v3.7/learning/api_guarantees/">API Guarantees</a>、<a href="https://etcd.io/docs/v3.7/op-guide/recovery/">Disaster Recovery</a>、<a href="https://etcd.io/docs/v3.7/op-guide/hardware/">Hardware</a>。</p></div>
+          </details>
+        </article>
+
+        <article class="card option-card" data-option-card data-tier="support" data-search="nats jetstream message stream transport replay at least once fsync">
+          <span class="tier">Transport／event distribution · #8</span>
+          <h3>NATS JetStream</h3>
+          <p>提供 persistent/replicated stream、ordered message、replay 與 acknowledgement，適合未來多 consumer fan-out；但不應取代 DB transaction。</p>
+          <details>
+            <summary>官方文件揭露的兩個重要限制</summary>
+            <div>
+              <ol>
+                <li>JetStream 不支援把多個 operation 做 atomic batch；atomic unit 是單一 stream operation。</li>
+                <li>File stream 預設不是每筆 acknowledgement 前立刻 <code>fsync</code>，預設 <code>sync_interval</code> 最長約兩分鐘；OS/power failure 可能遺失近期已 ack message。設成 <code>always</code> 並 replication 可提高 durability，但最慢。</li>
+              </ol>
+              <p>Base QoS 是 at least once，consumer 必須 idempotent。來源：<a href="https://docs.nats.io/nats-concepts/jetstream">NATS JetStream concepts</a>。</p>
+            </div>
+          </details>
+        </article>
+
+        <article class="card option-card excluded" data-option-card data-tier="excluded" data-search="kubernetes crd k3s application data custom resource api">
+          <span class="tier">排除 primary SSOT · #10</span>
+          <h3>Kubernetes API／CRD</h3>
+          <p>Kubernetes API 有 RBAC、watch 與 <code>resourceVersion</code> optimistic concurrency，看似方便；但官方明確警告不要把 Custom Resource 當 application、end-user 或 monitoring data storage。</p>
+          <details>
+            <summary>K3s 已用 SQLite／etcd，為何不能順便用？</summary>
+            <div><p>K3s 的 datastore 是 Kubernetes control plane 的內部 authority，不是 OpenAB application database。K3s 官方說 SQLite 不能用於 multi-server cluster；embedded etcd HA 要至少三個奇數 server 與 quorum。把 run history 放 CRD 會把應用 availability、backup 與負載綁上 cluster，還不提供跨 object transaction。來源：<a href="https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/">Kubernetes Custom Resources</a>、<a href="https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions">API Concepts</a>、<a href="https://docs.k3s.io/datastore">K3s Datastore</a>、<a href="https://docs.k3s.io/datastore/ha-embedded">K3s HA embedded etcd</a>。</p></div>
+          </details>
+        </article>
+
+        <article class="card option-card conditional" data-option-card data-tier="conditional" data-search="temporal workflow durable timer retry resume activity idempotent">
+          <span class="tier">Workflow 複雜後再評估 · #5</span>
+          <h3>Temporal</h3>
+          <p>Workflow Execution 可以從 event history 復原並持續數秒到數年；timer、retry、等待與 resume 是 first-class。它解決的是 durable orchestration，不只是資料存哪裡。</p>
+          <details>
+            <summary>為何現在偏重，而且仍非 exactly once？</summary>
+            <div><p>Temporal application 需要 Temporal Service、Worker、task queue 與 persistence；可以 self-host，也可用 Temporal Cloud。外部呼叫放在 Activity，官方仍建議 Activity idempotent，因為遠端成功後，本機 completion event 可能還沒保存就故障。來源：<a href="https://docs.temporal.io/workflow-execution">Workflow Execution</a>、<a href="https://docs.temporal.io/activities">Activities</a>、<a href="https://github.com/temporalio/temporal/blob/main/docs/architecture/README.md">Temporal Server Architecture</a>。</p></div>
+          </details>
+        </article>
+
+        <article class="card option-card excluded" data-option-card data-tier="excluded" data-search="s3 object store evidence backup immutable conditional write">
+          <span class="tier">Evidence／backup</span>
+          <h3>Object store（以 S3 為代表）</h3>
+          <p>非常適合 immutable evidence、raw model output、manifest 與 off-host backup。S3 對單一 key 有 strong read-after-write consistency 與 atomic update，也支援 ETag conditional write。</p>
+          <details>
+            <summary>為何不作 active state？</summary>
+            <div><p>單一 object 的條件不等於 run、reviewer、audit、outbox 多 object transaction。把整個 run 放一個 object 只是把 canonical snapshot 搬上網路；拆多 object 又要自行協調。來源：<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/">S3 Consistency Model</a>、<a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html">Conditional Writes</a>。</p></div>
+          </details>
+        </article>
+
+        <article class="card option-card excluded" data-option-card data-tier="excluded" data-search="redis cache transaction rollback persistence aof replication">
+          <span class="tier">Disposable cache／projection</span>
+          <h3>Redis</h3>
+          <p>可做 ephemeral view、rate limit 或 loss-tolerant cache。要把它調到接近 primary DB durability/HA，會增加維運，卻仍沒有本案需要的 relational/audit ergonomics。</p>
+          <details>
+            <summary>官方 durability caveat</summary>
+            <div><p>Redis transaction 會序列執行 commands，但不支援 rollback。預設每秒 AOF policy 約可遺失一秒資料；replication 預設 asynchronous，<code>WAIT</code> 也不會把它變成 strong-consistency CP system，failover 仍可能遺失 acknowledged write。來源：<a href="https://redis.io/docs/latest/develop/using-commands/transactions/">Transactions</a>、<a href="https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/">Persistence</a>、<a href="https://redis.io/docs/latest/operate/oss_and_stack/management/replication/">Replication</a>。</p></div>
+          </details>
+        </article>
+
+        <article class="card option-card" data-option-card data-tier="support" data-search="git local gate bridge private runtime repo public separation commits actions">
+          <span class="tier">短期 bridge · #9</span>
+          <h3>保留 Git，但把 gate 移到 local</h3>
+          <p>它可移除 hosted runner queue/startup，但仍保留 commit、branch、merge、push 與 ref ceremony。若 source 與 runtime 用完全分離的 private repo，private/public separation 技術上是強的；代價是永久多維護第二個 repo。</p>
+          <details>
+            <summary>Git audit 與 public caveat</summary>
+            <div><p>Git clone 通常包含完整 history，很適合 source VCS 與備援：<a href="https://git-scm.com/book/en/v2/Getting-Started-About-Version-Control">Pro Git</a>。但它不是天然 tamper-proof operational ledger：branch ref 可移動，reflog 是 local 且預設 90 天（unreachable 30 天）過期，GC 會清 unreachable object。來源：<a href="https://git-scm.com/docs/git-reflog">git-reflog</a>、<a href="https://git-scm.com/docs/git-gc">git-gc</a>。</p></div>
+          </details>
+        </article>
+      </div>
+    </section>
+
+    <section id="architecture" aria-labelledby="architecture-title">
+      <h2 id="architecture-title">建議的單機 MVP 架構</h2>
+      <pre aria-label="建議架構 ASCII 圖">Public Git repository                  Installed OpenAB on one host
+[code / defaults / schema]               +----------------------------+
+         | build/deploy                   | openab-control             |
+         v                                | [only runtime writer]      |
+binary + pinned source revision ---------&gt;|       |                    |
+                                          |       v                    |
+Private installation config -------------&gt;| loaded config + digest    |
+[fixed roster/routes/allowlists]          |       |                    |
+                                          |       v                    |
+CLI / operator API ----------------------&gt;| host-local control.db      |
+Reviewer adapters &lt;--- planned effects ---| outside Git checkout       |
+                                          +-------------+--------------+
+                                                        |
+                                                        v terminal export
+                                          private evidence bundle
+                                          [JSONL + artifacts + SHA-256]
+
+Per-transition Git/GitHub lookup ---------X
+GitHub runtime write ---------------------X
+Optional sanitized GitHub summary &lt;------- one-way projection</pre>
+
+      <h3>部署原則</h3>
+      <ul class="checklist">
+        <li>目前先用同一台主機上的一般 <code>openab-control</code> service。k3s 是 deployment option，不是 SSOT 前提，避免 Kubernetes availability 變成每次 review 的不必要 dependency。</li>
+        <li>只有一個 database-owning process。Reviewer、helper job 與 CLI 不直接開 SQLite 寫入，只呼叫 control API。</li>
+        <li><code>control.db</code>、artifact 與 private config 都在 checkout 外的 host-local path，採 least privilege；remote client 不 mount DB。</li>
+        <li>起始採 rollback journal＋<code>synchronous=EXTRA</code>＋每 connection <code>foreign_keys=ON</code>＋bounded busy timeout。官方文件：<a href="https://sqlite.org/pragma.html#pragma_synchronous">PRAGMA synchronous</a>、<a href="https://sqlite.org/pragma.html#pragma_foreign_keys">PRAGMA foreign_keys</a>。</li>
+        <li>每個 transition 用短 transaction；外部 API call 永遠不在 DB transaction 裡。先 commit effect plan，再 dispatch，再開新 transaction confirm。</li>
+        <li>Startup 在 migration、<code>integrity_check</code> 與 <code>foreign_key_check</code> 通過前拒絕 write。來源：<a href="https://sqlite.org/pragma.html#pragma_integrity_check">SQLite integrity_check</a>。</li>
+        <li>每個 run 記錄 <code>product_revision</code> 與 <code>installation_config_digest</code>，不靠即時讀 Git registry 才知道 reviewer 是誰。</li>
+      </ul>
+
+      <div class="callout warn">
+        <h3>若日後仍部署在 k3s</h3>
+        <p>只能 single replica、host-local RWO、node affinity，並採 recreate handoff，確保兩個 Pod 不會同時開同一份 DB。Backup 必須離開該 node failure boundary。近期若發生 <code>ContainerStatusUnknown</code>，那是 service availability incident，不是讓另一個未 fenced Pod 搶 DB 或 fallback 回 GitHub 的理由。若必須在 node loss 後自動繼續，應觸發 PostgreSQL/rqlite/HA 評估。</p>
+      </div>
+
+      <details>
+        <summary>為什麼第一版不要直接開 WAL？</summary>
+        <div>
+          <p>WAL 可提升同時讀寫，但增加 <code>-wal</code>、<code>-shm</code>、checkpoint、same-host shared-memory 與 backup 規則。低流量的一個 writer MVP，rollback journal 比較容易操作。若實測 contention 才開 WAL，需：</p>
+          <ol>
+            <li>DB、writer、reader、<code>-wal</code>、<code>-shm</code> 都留在同一 physical host/local filesystem；</li>
+            <li>Backup 用 SQLite API 或 controlled checkpoint/close，不只複製主檔；</li>
+            <li>監控 checkpoint growth 與 long reader；</li>
+            <li>若斷電後不能失去最新 commit，用 <code>synchronous=FULL</code>；</li>
+            <li>Embedded SQLite 至少 3.51.3，或使用官方列出的 WAL-reset fix backport。</li>
+          </ol>
+          <p>來源：<a href="https://sqlite.org/wal.html">SQLite Write-Ahead Logging</a>。</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Go driver、build 時間與驗收 gate</summary>
+        <div><p>Store boundary 用 Go <code>database/sql</code>，但需另選 driver。第一個 spike 可測 <code>modernc.org/sqlite</code>：它是 CGo-free，研究時的 v1.56.0 文件列 SQLite 3.53.3，但要求相容的 <code>modernc.org/libc</code> 版本，兩者都應 pin。若 clean build 增加超過 30 秒或 warm affected-package test 增加超過 5 秒，做 bounded driver/bbolt comparison，不應因此回到 GitHub runtime state。來源：<a href="https://pkg.go.dev/database/sql">database/sql</a>、<a href="https://pkg.go.dev/modernc.org/sqlite">modernc.org/sqlite</a>。</p></div>
+      </details>
+
+      <h3>Minimal data model</h3>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Table</th><th>主要用途</th><th>關鍵 invariant</th></tr></thead>
+          <tbody>
+            <tr><td><code>runs</code></td><td>Run state/version、product revision、installation config digest、target base/head、input digest</td><td>Immutable target/config binding；expected <code>state_version</code> compare-and-swap；單一 terminal state</td></tr>
+            <tr><td><code>reviewer_executions</code></td><td>Reviewer/provider/model profile、執行狀態、raw/report artifact</td><td>Unique <code>(run_id, reviewer_id)</code>；不得拿另一個 run 的 output 交差</td></tr>
+            <tr><td><code>health_observations</code></td><td>Broker status、observed/expiry time、evidence</td><td>過期等於 unknown；health 不授予 authority</td></tr>
+            <tr><td><code>effects</code></td><td>Effect kind、idempotency key、request、external ref、attempt/error</td><td>Dispatch 前先 plan；crash ambiguity 進 <code>UNCERTAIN</code></td></tr>
+            <tr><td><code>artifacts</code></td><td>Media type、SHA-256、size、inline 或 content-addressed private path</td><td>讀取/匯出驗 digest；path 不得逃出 private root</td></tr>
+            <tr><td><code>events</code></td><td>Monotonic sequence、actor、type、canonical payload、digest chain</td><td>與 current-row update/effect plan 同 transaction；insert-only store API</td></tr>
+            <tr><td><code>schema_migrations</code></td><td>Version、name、checksum、applied time</td><td>Applied version checksum immutable；拒開比 binary 新的 DB</td></tr>
+            <tr><td><code>broker_runtime_states</code>（optional）</td><td>Hot enable/disable/quarantine、reason/expiry</td><td>只在需要即時 admin 時啟用；<code>broker_id</code> 必須存在於 loaded private config</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Static roster、route 與 deployment binding 不必整份複製進 DB；private config snapshot 仍是 installation authority。每個 run 只保存 digest 與重現該 run 必要的 resolved binding。若 MVP 不需 hot admin，就省略 optional table 並以 restart/reload 變更 roster，不再保留 public Git registry 作隱性 runtime authority。</p>
+    </section>
+
+    <section id="effects" aria-labelledby="effects-title">
+      <h2 id="effects-title">沒有任何候選能消除「外部動作不確定」</h2>
+      <p>SQLite transaction 無法同時 commit Discord 訊息、provider 呼叫、Kubernetes mutation 或 GitHub API。PostgreSQL、rqlite、etcd、檔案與 Temporal 也一樣。真正的危險窗口如下：</p>
+      <pre aria-label="外部動作不確定窗口">commit durable effect intent
+          |
+          v
+call Discord / provider / Kubernetes / GitHub
+          |
+          +---- remote system succeeds
+          |
+          X---- process or network fails before local confirmation</pre>
+      <p>在 <code>X</code> 之後，本機不能只看 DB 就知道遠端究竟有沒有成功。直接 retry 可能重複；直接當成功可能漏掉。最低限度流程是：</p>
+      <div class="flow">
+        <div><h3>先存意圖</h3><p>在狀態 transaction 內建立 stable <code>effect_id</code> 與 idempotency key。</p></div>
+        <div><h3>再呼叫遠端</h3><p>DB commit 後才 dispatch；不在 transaction 持有期間等網路。</p></div>
+        <div><h3>記錄結果</h3><p>另開 transaction 保存 external reference、attempt 與 response digest。</p></div>
+        <div><h3>不確定就查證</h3><p>標記 <code>UNCERTAIN</code>，查 remote 或交由人處置，不盲目 replay。</p></div>
+      </div>
+      <p>Outbox 保證的是「意圖已 durable，至少會嘗試」，不是跨服務 universal exactly once。若 provider 支援 caller-supplied idempotency key，就用 stable effect ID；否則保存 fingerprint 與可查的 remote reference。Temporal 可以大幅減少 retry/resume plumbing，但官方仍建議 Activity idempotent：<a href="https://docs.temporal.io/activities">Temporal Activities</a>。</p>
+
+      <div class="callout info">
+        <h3>Audit trail 也不是防主機擁有者竄改的帳本</h3>
+        <p>SQLite event table＋digest chain 能偵測意外損壞或局部修改，但能替換 DB 與所有 backup 的主機管理者，也能重寫整條 history。要對抗這種情境，terminal manifest digest 必須定期簽章或錨定到另一個受信任 failure/authority boundary。Git 也不是自動 tamper-proof：ref 可移動、local reflog 會過期、unreachable object 會被 GC。這不妨礙它作 source VCS，但不應誇大 operational audit 保證。</p>
+      </div>
+    </section>
+
+    <section id="recovery" aria-labelledby="recovery-title">
+      <h2 id="recovery-title">Migration、backup 與 recovery 還是要設計</h2>
+      <h3>Schema migration</h3>
+      <ul>
+        <li>Numbered SQL migration 放在 public Git，透過 Go <code>embed</code> 編入 binary；來源：<a href="https://pkg.go.dev/embed">Go embed</a>。</li>
+        <li>用 SQLite <code>PRAGMA user_version</code> 保存 application schema level，並用 <code>schema_migrations</code> 保存每個 migration checksum；來源：<a href="https://sqlite.org/pragma.html#pragma_user_version">SQLite user_version</a>。</li>
+        <li>Startup exclusive ownership 下做 forward migration；binary 遇到較新的 DB 必須拒絕開啟。</li>
+        <li>Migration 前建立並驗證 backup。複雜 table 變更依官方 transactional rebuild 流程：<a href="https://sqlite.org/lang_altertable.html">SQLite ALTER TABLE</a>。</li>
+      </ul>
+
+      <h3>Backup policy</h3>
+      <ul>
+        <li>每個 terminal run、每次 migration 前，以及仍有 active work 時按簡單時程建立一致 backup。</li>
+        <li>使用 Online Backup API 或 <code>VACUUM INTO</code>；WAL connection 存活時不能只 <code>cp control.db</code>。來源：<a href="https://sqlite.org/backup.html">Backup API</a>、<a href="https://sqlite.org/lang_vacuum.html#vacuuminto">VACUUM INTO</a>。</li>
+        <li>至少一份加密 backup 離開主機/k3s node 的 disk failure boundary；PVC 不是 backup，public repo 也不是 backup 位置。</li>
+        <li>對產出的 backup 執行 integrity/foreign-key check，記 SHA-256 與 schema version，並定期真的 restore。</li>
+        <li>Recovery 停止唯一 writer、restore 已驗證 snapshot、走正常 migration path；原本 in-flight effect 全部先標 <code>UNCERTAIN</code>。</li>
+      </ul>
+
+      <h3>Filesystem artifact protocol</h3>
+      <p>大型 diff/raw output 留在 private content-addressed artifact directory，SQLite 只記 path、size、media type 與 digest。先寫 temporary file、<code>File.Sync</code>、同 filesystem rename、在支援的 Linux filesystem sync parent directory，最後才 commit DB reference。Go 官方提醒 <code>Rename</code> 有 OS-specific atomicity 限制，所以必須在實際 filesystem 做 fault test：<a href="https://pkg.go.dev/os">Go os</a>。</p>
+
+      <details>
+        <summary>SQLite 解決與不解決的事情總表</summary>
+        <div>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>它能解決</th><th>它不能解決</th></tr></thead>
+              <tbody>
+                <tr><td>Local transition，不等 commit/runner/API/comment round-trip</td><td>Multi-node consensus 或 automatic failover</td></tr>
+                <tr><td>Current state＋audit event＋effect plan 同 transaction</td><td>Discord/provider/Kubernetes/GitHub exactly once</td></tr>
+                <tr><td>Rollback-journal crash recovery 與 offline fault test</td><td>Host owner 惡意重寫 DB/backup</td></tr>
+                <tr><td>SQL constraint、index、query、foreign key</td><td>Host/disk loss；仍需 off-host tested backup</td></tr>
+                <tr><td>Public source 與 private runtime file 分離</td><td>Secret management、provider output correctness 或 runtime permission</td></tr>
+                <tr><td>Consistent online backup</td><td>Schema migration 與 driver/build 成本</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <section id="cutover" aria-labelledby="cutover-title">
+      <h2 id="cutover-title">遷移：不可有 dual-write 過渡期</h2>
+      <p>這是 authority cutover，不是長期同步工程。舊 Git/GitHub runtime state 變成 read-only archive；新 run 才使用新 authority。</p>
+
+      <div class="flow">
+        <div><h3>定義 epoch</h3><p>建立 <code>authority_epoch</code>/<code>cutover_id</code>，記錄舊/new revision、schema、config digest 與 UTC boundary。</p></div>
+        <div><h3>清空舊 frontier</h3><p>盤點所有 non-terminal run/effect，在舊 authority 下完成、取消或人工 reconcile。</p></div>
+        <div><h3>凍結與封存</h3><p>停用舊 operational trigger，匯出 Issue/comment/workflow evidence＋manifest/checksum，標成只讀。</p></div>
+        <div><h3>只啟用新 writer</h3><p>驗 schema/integrity/config digest，第一個新 run 只進 DB；舊 epoch webhook 一律拒絕並 audit。</p></div>
+      </div>
+
+      <h3>切換前</h3>
+      <ol>
+        <li>先批准 superseding ADR；本文件本身不授權更改 architecture。</li>
+        <li>把 deployment-specific broker config 移出 public tree，完成獨立 history/log/secret audit，但尚不公開 repo。</li>
+        <li>不要搬移「做到一半」的 live run。若真的無法避免，必須 freeze old writer、逐一 reconcile effect、做一次 audited import，驗證後才開 new writer，且永不寫回舊系統。</li>
+        <li>停用的是 Git/GitHub operational state mutation，不是 source CI、test 或 release validation。</li>
+      </ol>
+
+      <h3>切換後</h3>
+      <ul>
+        <li>Optional GitHub summary 只能由 DB outbox 單向發出；projection failure 不可回滾 run，也不可授權 transition。</li>
+        <li>Historical import 若為搜尋用途，標 old epoch 且 immutable，不做持續 mirror。</li>
+        <li>第一個 new run 以前可以取消切換並重啟舊 writer；第一個 new run 之後，rollback 是 restore/repair 新 DB。直接重開舊 writer 會 split brain，若真要換回必須再做一個新 epoch cutover。</li>
+        <li>每一列、evidence manifest 與 projection 帶 authority epoch，避免 late webhook 混入。</li>
+      </ul>
+
+      <div class="callout danger">
+        <h3>明確禁止的「保險」</h3>
+        <p>不要同時把 SQLite 與 GitHub comment 都寫一份，再打算日後決定信哪一份。這不是 backup，而是兩個 authority；網路延遲、部分失敗與 retry 最終一定會讓它們分叉。Backup 是可驗證、不可主動推進 run 的 copy。</p>
+      </div>
+    </section>
+
+    <section id="triggers" aria-labelledby="triggers-title">
+      <h2 id="triggers-title">用可量測門檻決定何時升級</h2>
+      <p>下列數字是針對本專案提出的 engineering gate，不是 vendor limit。勾選目前已發生的情況，頁面會給一個即時提示；選擇不會離開瀏覽器。</p>
+
+      <div class="trigger-panel">
+        <ul class="trigger-list">
+          <li><label><input type="checkbox" data-trigger="sqlite"> <span>允許兩個 active run，或需要跨 run/filter query</span></label></li>
+          <li><label><input type="checkbox" data-trigger="sqlite"> <span>Audit、effect attempt 或 health history 要獨立保留／查詢</span></label></li>
+          <li><label><input type="checkbox" data-trigger="sqlite"> <span>純檔案設計已出現第二個 projection、compaction 或 repair subsystem</span></label></li>
+          <li><label><input type="checkbox" data-trigger="postgres"> <span>需要多個 control writer host 或 loss of host 後自動繼續</span></label></li>
+          <li><label><input type="checkbox" data-trigger="postgres"> <span>要求 online PITR，或 SQLite 連續兩次 restore drill miss RTO/RPO</span></label></li>
+          <li><label><input type="checkbox" data-trigger="postgres"> <span>調校後七天內 <code>SQLITE_BUSY</code> &gt; 0.1% 或 transaction p95 &gt; 100 ms</span></label></li>
+          <li><label><input type="checkbox" data-trigger="temporal"> <span>Controller 已有至少三套 timer/retry/reconciliation loop</span></label></li>
+          <li><label><input type="checkbox" data-trigger="temporal"> <span>Workflow 常跨 24 小時／deployment，或五個以上 durable stage</span></label></li>
+          <li><label><input type="checkbox" data-trigger="temporal"> <span>90 天內至少兩次 resume/timer/retry state defect incident</span></label></li>
+        </ul>
+        <div class="trigger-output" id="trigger-output" aria-live="polite">目前基準：使用 SQLite 做 offline spike；還不需要 PostgreSQL 或 Temporal。</div>
+      </div>
+
+      <details open>
+        <summary>Canonical JSON → SQLite</summary>
+        <div><p>以下任一項成立就升級：兩個 active run；需要 retained/filtered audit、effect 或 health history；有第二份必須與 current state atomic 的檔案；whole-snapshot replace p95 超過 100 ms；recovery 開始需要 log repair/compaction/index rebuild；或超過一個 schema migration 需要客製 recovery。</p></div>
+      </details>
+
+      <details open>
+        <summary>SQLite → PostgreSQL</summary>
+        <div>
+          <p>以下任一項成立就「評估」，通過 failure/restore spike 後才採用：</p>
+          <ul>
+            <li>需要一個以上 control writer host，或 loss of SQLite host 後自動繼續；</li>
+            <li>約定 host-loss RTO ≤ 15 分鐘或 RPO ≤ 5 分鐘，而 SQLite backup/restore 實測做不到；</li>
+            <li>需要 online PITR，或連續兩次 restore drill miss 約定目標；</li>
+            <li>調校 short transaction 後，七天內 <code>SQLITE_BUSY</code> &gt; 0.1%，或 p95 transaction latency &gt; 100 ms；</li>
+            <li>已有受支援 managed DB，可實際減少的維運大於新增成本。</li>
+          </ul>
+          <p>DB file size 本身不是升級理由；remote user 仍應呼叫 control API。Managed PostgreSQL 上線前要寫清 backup retention、restore test、failover mode、failure boundary、RPO/RTO 與 exit/export path。</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>SQLite → rqlite（只有全部條件成立）</summary>
+        <div><ul><li>明確需要 SQLite relational compatibility＋HTTP API；</li><li>至少三個獨立 failure host（三個 Pod 在一台 host 不算）；</li><li>接受 quorum membership、snapshot、recovery 維運；</li><li>不允許 stale decision 的 client 明確用 <code>linearizable</code> read；</li><li>failure exercise 證明一台 node loss 不丟 acknowledged write，且有 loss-of-quorum recovery 文件。</li></ul></div>
+      </details>
+
+      <details>
+        <summary>何時加入 Temporal、etcd 或 NATS？</summary>
+        <div>
+          <p><strong>Temporal：</strong>前述 workflow complexity signal 任兩項發生，且接受 Temporal Cloud 或自行操作 service＋persistence，才做 prototype。它不免除 Activity idempotency。</p>
+          <p><strong>etcd：</strong>多個 controller 真正需要 distributed linearizable compare/watch/lease，而且已有受支援三節點 etcd。Run/evidence history 仍放別處。</p>
+          <p><strong>NATS：</strong>至少兩個獨立 consumer 需要 durable fan-out/replay。由 DB commit/outbox 後 emit，consumer idempotent，stream 不成為第二 authority。</p>
+          <p><strong>CRD：</strong>只用於少量、低頻、declarative Kubernetes desired state。Application run data 沒有重新列入 primary SSOT 的 trigger。</p>
+        </div>
+      </details>
+    </section>
+
+    <section id="validation" aria-labelledby="validation-title">
+      <h2 id="validation-title">分階段驗證與停止條件</h2>
+      <div class="callout danger">
+        <h3>這份計畫不授權 live canary</h3>
+        <p>Phase 0–3 全部可離線或 fake adapter 完成。Phase 4 只有在 maintainer 日後另行明確同意時才能執行，且只限一個 bounded run，不會自動再開下一個。</p>
+      </div>
+
+      <h3>Phase 0 — Authority decision</h3>
+      <p>先產出 superseding ADR，把 MVP 限定為 local review run，GitHub runtime view 只作 projection。只有在 single control process/storage host 可接受，且 Claim、renewable Lease、Capacity Index、GitHub comment canonicalization 明確 defer 時才往下。若現在就需要 multi-host writer/automatic failover，停止 SQLite 路線並做 client/server design。</p>
+
+      <h3>Phase 1 — Offline storage spike</h3>
+      <p>只做 migration、store interface、一個 run transition、一個 event、一個 effect plan、backup 與 restore；全部用 temporary local file，不呼叫 GitHub、Discord、provider 或 Kubernetes。</p>
+      <ul>
+        <li>1,000 次注入 process termination/reopen，每次只能看到完整 old state 或完整 new state，不能 mixed state。</li>
+        <li>重複 idempotency submission 只能建立一個 effect plan。</li>
+        <li>Backup restore 的 logical row/artifact digest 相同，且 integrity/foreign-key check 通過。</li>
+        <li>Median local transition &lt; 100 ms。</li>
+        <li>Driver 增加 clean repo build ≤ 30 秒，warm affected-package test ≤ 5 秒（在 maintainer machine 測）。</li>
+      </ul>
+      <p><strong>立即停止：</strong>已 commit transition 在 application crash 後消失、出現 mixed state、restore 要手改 DB，或 driver 超過 build budget。Build 問題觸發 driver/bbolt bounded comparison，不觸發回 GitHub。</p>
+
+      <h3>Phase 2 — Replay 已有 evidence</h3>
+      <p>把既有 canary fixture/provider response 離線 replay 進 store，同一 restored copy 匯出兩次。Canonical record/digest 必須相同，已知 failed run 仍是 failed，不能憑空補成完成。Duplicate reviewer、target ambiguity、missing evidence 或 non-deterministic output 任一發生就停止。</p>
+
+      <h3>Phase 3 — Fake-adapter end-to-end</h3>
+      <p>用兩個 fake reviewer 經 local outbox，分別在 dispatch 前、模擬 remote success 後、local confirm 前 crash。Pre-dispatch 可依 idempotency 安全 retry；post-dispatch 必須變 <code>UNCERTAIN</code> 並 reconcile。Startup 若自動 replay uncertain effect，或 reviewer A 能滿足 reviewer B 的紀錄，就停止。</p>
+
+      <h3>Phase 4 — 另行核准的一個 local pilot</h3>
+      <p>只有 maintainer 另行批准後，才做一個 SQLite-authoritative、GitHub runtime write 完全停用的 bounded external review。檢查 DB、evidence、elapsed time 與 recovery note。DB integrity、backup、artifact、target、effect 任一不明，就立即停止；不可 fallback 回 GitHub comment authority。</p>
+    </section>
+
+    <section id="recommendation" aria-labelledby="recommendation-title">
+      <h2 id="recommendation-title">最後建議</h2>
+      <div class="decision">
+        <h3>現在：先做 host-local SQLite 的 offline spike</h3>
+        <p>它最直接處理你真正不滿意的等待：runtime transition 不再被 GitHub queue、runner、commit/push/merge ceremony 綁住。它也比 JSONL＋projection 少自製 recovery/transaction，比 PostgreSQL/etcd/Temporal 少不必要的服務維運。</p>
+      </div>
+      <ol>
+        <li><strong>Git 繼續存在：</strong>只管 public product code/default policy/schema/migration/release，不在每次 transition 查詢。</li>
+        <li><strong>Private installation config 分開：</strong>固定 roster/routes/allowlists 在 checkout 外；hot enable/disable/quarantine 有需要才進 optional DB table。</li>
+        <li><strong>Runtime state 只有一個 writer：</strong>一個 host service＋SQLite，current state、audit event、effect plan 同 transaction。</li>
+        <li><strong>Evidence 與 backup 分開：</strong>private immutable bundle＋off-host verified backup；不是第二個 mutable authority。</li>
+        <li><strong>Cutover 不 dual-write：</strong>舊 Git/GitHub state 先 freeze/archive/reconcile，新 run 才進新 authority epoch。</li>
+        <li><strong>用 trigger 升級：</strong>multi-host/HA/PITR 才 PostgreSQL；特定 SQLite/Raft 需求才 rqlite；workflow complexity 才 Temporal。</li>
+      </ol>
+      <p>不要把目前的企業級 lifecycle 每一張表原封不動搬到 DB。Local DB 的價值在於讓 MVP control loop 變小；若把 Claim、Lease、Capacity Index、所有 projection/reconciliation 全部照搬，只是把複雜度換一個地方繼續等待。</p>
+    </section>
+
+    <section id="sources" aria-labelledby="sources-title">
+      <h2 id="sources-title">官方 primary sources</h2>
+      <p>產品性質只引用官方專案或 vendor 文件。推薦排序、比較評分與數值門檻是本研究針對 OpenAB 做的 inference，不是 vendor 宣稱。連結需要網路才能開啟，但本文件的結論與解釋本身可離線閱讀。</p>
+      <ol class="citation-list">
+        <li><a href="https://sqlite.org/whentouse.html">SQLite: Appropriate Uses</a></li>
+        <li><a href="https://sqlite.org/transactional.html">SQLite Is Transactional</a></li>
+        <li><a href="https://sqlite.org/lang_transaction.html">SQLite Transaction Syntax and Concurrency</a></li>
+        <li><a href="https://sqlite.org/wal.html">SQLite Write-Ahead Logging</a></li>
+        <li><a href="https://sqlite.org/useovernet.html">SQLite Over a Network</a></li>
+        <li><a href="https://sqlite.org/lockingv3.html">SQLite File Locking and Crash Recovery</a></li>
+        <li><a href="https://sqlite.org/backup.html">SQLite Backup API</a></li>
+        <li><a href="https://sqlite.org/pragma.html">SQLite PRAGMA Reference</a></li>
+        <li><a href="https://sqlite.org/lang_altertable.html">SQLite ALTER TABLE</a></li>
+        <li><a href="https://sqlite.org/onefile.html">SQLite Single-file Cross-platform Database</a></li>
+        <li><a href="https://go.dev/doc/database/execute-transactions">Go: Executing Transactions</a></li>
+        <li><a href="https://go.dev/doc/database/manage-connections">Go: Managing Database Connections</a></li>
+        <li><a href="https://pkg.go.dev/database/sql">Go: database/sql</a></li>
+        <li><a href="https://pkg.go.dev/os">Go: os</a></li>
+        <li><a href="https://pkg.go.dev/encoding/json">Go: encoding/json</a></li>
+        <li><a href="https://pkg.go.dev/embed">Go: embed</a></li>
+        <li><a href="https://pkg.go.dev/modernc.org/sqlite">modernc.org/sqlite project documentation</a></li>
+        <li><a href="https://github.com/etcd-io/bbolt">bbolt project documentation</a></li>
+        <li><a href="https://www.postgresql.org/docs/current/tutorial-transactions.html">PostgreSQL: Transactions</a></li>
+        <li><a href="https://www.postgresql.org/docs/current/mvcc-intro.html">PostgreSQL: MVCC</a></li>
+        <li><a href="https://www.postgresql.org/docs/current/ddl-constraints.html">PostgreSQL: Constraints</a></li>
+        <li><a href="https://www.postgresql.org/docs/current/wal-intro.html">PostgreSQL: WAL</a></li>
+        <li><a href="https://www.postgresql.org/docs/current/backup.html">PostgreSQL: Backup</a></li>
+        <li><a href="https://www.postgresql.org/docs/current/continuous-archiving.html">PostgreSQL: Continuous Archiving and PITR</a></li>
+        <li><a href="https://www.postgresql.org/docs/current/warm-standby.html">PostgreSQL: Warm Standby</a></li>
+        <li><a href="https://rqlite.io/docs/api/api/">rqlite: API and Raft Writes</a></li>
+        <li><a href="https://rqlite.io/docs/api/read-consistency/">rqlite: Read Consistency</a></li>
+        <li><a href="https://rqlite.io/docs/clustering/general-guidelines/">rqlite: Cluster Guidelines</a></li>
+        <li><a href="https://etcd.io/docs/v3.7/learning/api/">etcd v3.7 API</a></li>
+        <li><a href="https://etcd.io/docs/v3.7/learning/api_guarantees/">etcd v3.7 API Guarantees</a></li>
+        <li><a href="https://etcd.io/docs/v3.7/op-guide/recovery/">etcd v3.7 Disaster Recovery</a></li>
+        <li><a href="https://etcd.io/docs/v3.7/op-guide/hardware/">etcd v3.7 Hardware Recommendations</a></li>
+        <li><a href="https://docs.nats.io/nats-concepts/jetstream">NATS JetStream Concepts and Durability</a></li>
+        <li><a href="https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/">Kubernetes: Custom Resources</a></li>
+        <li><a href="https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions">Kubernetes: API Concepts and Resource Versions</a></li>
+        <li><a href="https://docs.k3s.io/datastore">K3s: Datastore Options</a></li>
+        <li><a href="https://docs.k3s.io/datastore/ha-embedded">K3s: High Availability Embedded etcd</a></li>
+        <li><a href="https://docs.temporal.io/workflow-execution">Temporal: Workflow Execution</a></li>
+        <li><a href="https://docs.temporal.io/activities">Temporal: Activities</a></li>
+        <li><a href="https://github.com/temporalio/temporal/blob/main/docs/architecture/README.md">Temporal Server Architecture</a></li>
+        <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/">Amazon S3: Consistency Model</a></li>
+        <li><a href="https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html">Amazon S3: Conditional Writes</a></li>
+        <li><a href="https://redis.io/docs/latest/develop/using-commands/transactions/">Redis: Transactions</a></li>
+        <li><a href="https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/">Redis: Persistence</a></li>
+        <li><a href="https://redis.io/docs/latest/operate/oss_and_stack/management/replication/">Redis: Replication</a></li>
+        <li><a href="https://git-scm.com/docs/gitglossary">Git Glossary</a></li>
+        <li><a href="https://git-scm.com/docs/gitignore">Git Ignore Documentation</a></li>
+        <li><a href="https://git-scm.com/book/en/v2/Getting-Started-About-Version-Control">Pro Git: About Version Control</a></li>
+        <li><a href="https://git-scm.com/docs/git-reflog">Git Reflog</a></li>
+        <li><a href="https://git-scm.com/docs/git-gc">Git Garbage Collection</a></li>
+        <li><a href="https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/setting-repository-visibility">GitHub: Setting Repository Visibility</a></li>
+        <li><a href="https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository">GitHub: Managing Actions Settings</a></li>
+      </ol>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-inner">
+      <p>這是架構研究，不是實作或上線核准。文件不含外部字型、框架、追蹤程式或網路資產；下載後可離線閱讀。</p>
+    </div>
+  </footer>
+  <script>
+    (function () {
+      "use strict";
+
+      document.documentElement.classList.add("js-enabled");
+
+      var scenarioButtons = Array.prototype.slice.call(
+        document.querySelectorAll("[data-scenario-button]")
+      );
+      var scenarioResults = Array.prototype.slice.call(
+        document.querySelectorAll("[data-scenario-result]")
+      );
+
+      function selectScenario(name) {
+        scenarioButtons.forEach(function (button) {
+          button.setAttribute(
+            "aria-pressed",
+            button.getAttribute("data-scenario-button") === name ? "true" : "false"
+          );
+        });
+        scenarioResults.forEach(function (result) {
+          result.classList.toggle(
+            "is-active",
+            result.getAttribute("data-scenario-result") === name
+          );
+        });
+      }
+
+      scenarioButtons.forEach(function (button) {
+        button.addEventListener("click", function () {
+          selectScenario(button.getAttribute("data-scenario-button"));
+        });
+      });
+
+      var tierFilter = document.getElementById("tier-filter");
+      var solutionSearch = document.getElementById("solution-search");
+      var resetFilter = document.getElementById("reset-filter");
+      var filterCount = document.getElementById("filter-count");
+      var optionCards = Array.prototype.slice.call(
+        document.querySelectorAll("[data-option-card]")
+      );
+      var optionRows = Array.prototype.slice.call(
+        document.querySelectorAll("[data-option-row]")
+      );
+
+      function normalize(value) {
+        return String(value || "").toLocaleLowerCase("zh-TW").trim();
+      }
+
+      function itemMatches(item, tier, query) {
+        var sameTier = tier === "all" || item.getAttribute("data-tier") === tier;
+        var haystack = normalize(
+          item.getAttribute("data-search") + " " + item.textContent
+        );
+        return sameTier && (query === "" || haystack.indexOf(query) !== -1);
+      }
+
+      function applyFilters() {
+        var tier = tierFilter.value;
+        var query = normalize(solutionSearch.value);
+        var visibleCards = 0;
+
+        optionCards.forEach(function (card) {
+          var visible = itemMatches(card, tier, query);
+          card.setAttribute("data-hidden", visible ? "false" : "true");
+          if (visible) {
+            visibleCards += 1;
+          }
+        });
+
+        optionRows.forEach(function (row) {
+          var visible = itemMatches(row, tier, query);
+          row.setAttribute("data-hidden", visible ? "false" : "true");
+        });
+
+        filterCount.textContent = "顯示 " + visibleCards + " 個方案卡";
+      }
+
+      tierFilter.addEventListener("change", applyFilters);
+      solutionSearch.addEventListener("input", applyFilters);
+      resetFilter.addEventListener("click", function () {
+        tierFilter.value = "all";
+        solutionSearch.value = "";
+        applyFilters();
+        solutionSearch.focus();
+      });
+      applyFilters();
+
+      var triggerInputs = Array.prototype.slice.call(
+        document.querySelectorAll("[data-trigger]")
+      );
+      var triggerOutput = document.getElementById("trigger-output");
+
+      function countChecked(kind) {
+        return triggerInputs.filter(function (input) {
+          return input.checked && input.getAttribute("data-trigger") === kind;
+        }).length;
+      }
+
+      function updateTriggerRecommendation() {
+        var sqliteSignals = countChecked("sqlite");
+        var postgresSignals = countChecked("postgres");
+        var temporalSignals = countChecked("temporal");
+        var messages = [];
+
+        if (postgresSignals > 0) {
+          messages.push(
+            "已有 PostgreSQL 評估訊號：先寫明 RTO/RPO，再做 restore/failure spike；不是直接上線。"
+          );
+        } else if (sqliteSignals > 0) {
+          messages.push(
+            "純 JSON snapshot 的範圍已越界；SQLite 的 transaction/query/recovery 開始值得。"
+          );
+        } else {
+          messages.push("目前基準：使用 SQLite 做 offline spike；還不需要 PostgreSQL。");
+        }
+
+        if (temporalSignals >= 2) {
+          messages.push(
+            "同時達到兩個 workflow complexity 訊號：可另做 Temporal prototype，但 Activity 仍需 idempotent。"
+          );
+        } else if (temporalSignals === 1) {
+          messages.push("目前只有一個 Temporal 訊號，先量測，不急著增加 workflow service。");
+        }
+
+        triggerOutput.textContent = messages.join(" ");
+      }
+
+      triggerInputs.forEach(function (input) {
+        input.addEventListener("change", updateTriggerRecommendation);
+      });
+      updateTriggerRecommendation();
+    }());
+  </script>
+</body>
+</html>
