@@ -53,9 +53,10 @@ source control, not the operational source of truth.
 - [Legacy provenance](./docs/legacy/provenance.md)
 - [Issue tracker operations](./docs/agents/issue-tracker.md)
 
-The canonical Wayfinder map is a GitHub Issue labelled `wayfinder:map`. Open
-decision tickets are its child issues; research and planning documents do not
-silently become accepted architecture.
+The canonical map is
+[Design the greenfield OpenAB coding and review MVP](https://github.com/victorchutw/openab-orchestration/issues/1).
+Open decision tickets are its child issues; research and planning documents do
+not silently become accepted architecture.
 
 ## Public boundary
 
