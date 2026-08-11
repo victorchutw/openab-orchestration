@@ -1,0 +1,1109 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Runtime Core Interface — 拋棄式邏輯原型</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #667085;
+      --line: #d9dee8;
+      --paper: #ffffff;
+      --wash: #f4f7fb;
+      --accent: #2457d6;
+      --accent-soft: #e9efff;
+      --ok: #147a52;
+      --warn: #9a5b00;
+      --bad: #b42318;
+      --shadow: 0 12px 32px rgba(35, 50, 80, .08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--wash);
+      color: var(--ink);
+      font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, select { font: inherit; }
+
+    .shell {
+      width: min(1180px, calc(100% - 32px));
+      margin: 32px auto 72px;
+    }
+
+    .hero, .panel {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .hero { padding: 28px; }
+    .panel { padding: 22px; }
+
+    .eyebrow {
+      display: inline-flex;
+      padding: 5px 9px;
+      border-radius: 999px;
+      background: #fff2d6;
+      color: #7a4a00;
+      font-weight: 750;
+      letter-spacing: .02em;
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin: 14px 0 8px; font-size: clamp(28px, 4vw, 44px); line-height: 1.08; }
+    h2 { font-size: 20px; }
+    h3 { font-size: 15px; margin-bottom: 8px; }
+    .lede { max-width: 850px; color: var(--muted); font-size: 17px; }
+    .question { max-width: 900px; margin-bottom: 0; }
+
+    .stack { display: grid; gap: 18px; margin-top: 18px; }
+    .grid-2 { display: grid; grid-template-columns: 1.05fr .95fr; gap: 18px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+
+    .lens-card {
+      position: relative;
+      min-height: 190px;
+      padding: 16px;
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--paper);
+      color: var(--ink);
+      cursor: pointer;
+    }
+
+    .lens-card:hover, .lens-card.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+
+    .lens-card.active::after {
+      content: "目前檢視";
+      position: absolute;
+      right: 12px;
+      top: 12px;
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .lens-card.recommended h3::after {
+      content: "建議";
+      display: block;
+      width: fit-content;
+      margin-top: 7px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 10px;
+      letter-spacing: .03em;
+      text-transform: uppercase;
+    }
+
+    .lens-card p { color: var(--muted); font-size: 13px; }
+
+    code, pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
+    .signature {
+      display: block;
+      padding: 9px;
+      background: #f6f8fb;
+      border-radius: 8px;
+      color: #293750;
+      white-space: pre-wrap;
+    }
+
+    .metric {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fbfcfe;
+    }
+
+    .metric span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    .metric strong { display: block; margin-top: 3px; font-size: 16px; overflow-wrap: anywhere; }
+
+    .ownership {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .ownership > div {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    ul { margin: 8px 0 0; padding-left: 19px; }
+    li + li { margin-top: 5px; }
+
+    .action-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .action {
+      border: 1px solid #bdc6d6;
+      border-radius: 8px;
+      background: #fff;
+      color: #26344d;
+      padding: 8px 11px;
+      cursor: pointer;
+    }
+
+    .action:hover { border-color: var(--accent); color: var(--accent); }
+    .action.primary { background: var(--accent); border-color: var(--accent); color: white; }
+    .action.danger { color: var(--bad); }
+
+    .scenario-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-bottom: 14px;
+    }
+
+    .scenario-tab {
+      padding: 7px 10px;
+      border: 0;
+      border-radius: 8px;
+      color: var(--muted);
+      background: #eef1f6;
+      cursor: pointer;
+    }
+
+    .scenario-tab.active { color: white; background: var(--ink); }
+    .scenario-copy { color: var(--muted); min-height: 45px; }
+    .steps { display: grid; gap: 8px; }
+
+    .step {
+      display: grid;
+      grid-template-columns: 28px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      width: 100%;
+      padding: 10px;
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: white;
+      cursor: pointer;
+    }
+
+    .step.current { border-color: var(--accent); background: var(--accent-soft); }
+    .step.done { opacity: .62; }
+    .step:disabled { cursor: default; }
+    .step-number { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; background: #edf0f5; font-weight: 750; }
+    .step small { color: var(--muted); }
+
+    .offers {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      min-height: 26px;
+    }
+
+    .pill {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .reviewers { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .reviewer {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fbfcfe;
+    }
+
+    .reviewer .status { color: var(--muted); }
+    .context-list { margin-top: 8px; padding: 9px; border-radius: 8px; background: white; font-size: 12px; }
+    .context-list div + div { margin-top: 4px; }
+
+    .trace {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    pre {
+      min-height: 210px;
+      max-height: 390px;
+      overflow: auto;
+      margin: 0;
+      padding: 14px;
+      border-radius: 10px;
+      background: #101827;
+      color: #dce6f7;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .result {
+      margin-top: 12px;
+      padding: 12px;
+      border-left: 4px solid var(--accent);
+      border-radius: 8px;
+      background: #f7f9fc;
+    }
+
+    .result.ok { border-color: var(--ok); }
+    .result.warn { border-color: var(--warn); }
+    .result.bad { border-color: var(--bad); }
+
+    .audit {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .audit th, .audit td {
+      padding: 9px 8px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    .audit th { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+    .empty { color: var(--muted); font-style: italic; }
+    .note { color: var(--muted); font-size: 13px; }
+
+    @media (max-width: 900px) {
+      .grid-2, .grid-3, .ownership, .trace { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <span class="eyebrow">拋棄式原型 — 不可作為正式產品</span>
+      <h1>Runtime Core 的 seam 應該放在哪裡？</h1>
+      <p class="lede">用三種截然不同的 caller interface 推動同一個 deterministic Run。三者刻意共用相同的狀態模型：這個原型要找出哪一種 interface 能把狀態轉移、授權、併發、稽核、完成判定與外部效果決策留在 Runtime Core 裡。</p>
+      <p class="question"><strong>要回答的問題：</strong>Operator interface 是否只需陳述已獲授權的 Operator Action，而 Execution Adapter 是否只需回報觀察到的事實，並由 Runtime Core 獨自決定可持久保存的結果？</p>
+    </section>
+
+    <div class="stack">
+      <section class="panel">
+        <h2>1. 選擇 interface 檢視方式</h2>
+        <p class="note">切換檢視方式不會重設 Run。請觀察同一個動作如何改變 caller request 與 receipt，而不改變權威行為。</p>
+        <div id="lens-cards" class="grid-3"></div>
+      </section>
+
+      <section class="panel">
+        <h2>建議 seam 所隱含的狀態所有權</h2>
+        <div class="ownership">
+          <div>
+            <h3>Runtime Core 權威擁有</h3>
+            <ul>
+              <li>Run 生命週期、revision、Run Outcome，以及已接受的狀態轉移紀錄</li>
+              <li>Operator Action capability 與具冪等性的 receipt</li>
+              <li>Execution 帳冊與經驗證的 Execution Completion</li>
+              <li>不可變 artifact 的身分、digest、歸屬，以及已接受的關聯</li>
+              <li>可持久保存的外部效果意圖，以及效果為待處理、已觀察、不確定、已停止或已隔離</li>
+              <li>依授權裁切的投影，包括每位 Reviewer 專屬的輸入 manifest</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Caller 與 Adapter 僅可擁有</h3>
+            <ul>
+              <li>可隨時丟棄的 UI 投影與呈現狀態</li>
+              <li>傳輸連線、provider correlation 與 session 快取</li>
+              <li>Execution Adapter 背後的 workspace 運作機制</li>
+              <li>執行或釐清外部效果時所需的 Adapter 本機紀錄</li>
+              <li>絕不可擁有：Run Stage、Run Condition、Run Outcome，或自行宣告的 Execution Completion</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid-2">
+        <div class="panel">
+          <h2>2. 引導式否證</h2>
+          <div id="scenario-tabs" class="scenario-tabs"></div>
+          <p id="scenario-copy" class="scenario-copy"></p>
+          <div id="scenario-steps" class="steps"></div>
+        </div>
+        <div class="panel">
+          <h2>自由操作</h2>
+          <p class="note">所有按鈕都會保持可用。非法輸入必須在不改變狀態的前提下被拒絕；caller 不應為了維持 Runtime Core 安全而持有一份狀態轉移圖。</p>
+          <div id="free-play" class="action-bar"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>3. 權威 Run 投影</h2>
+        <div id="metrics" class="metrics"></div>
+        <h3 style="margin-top: 18px;">目前提供的 Operator Actions</h3>
+        <div id="offers" class="offers"></div>
+        <div class="reviewers" style="margin-top: 18px;">
+          <div id="reviewer-a" class="reviewer"></div>
+          <div id="reviewer-b" class="reviewer"></div>
+        </div>
+        <div id="result" class="result">尚未進行任何 exchange。</div>
+      </section>
+
+      <section class="panel">
+        <h2>4. 哪些資訊跨越了 seam？</h2>
+        <p class="note">左側是 caller 必須知道的資訊；右側是 Runtime Core 可持久保存的決定。傳輸語法只是示意，真正要判斷的是所有權與 invariants。</p>
+        <div class="trace">
+          <div>
+            <h3>Caller 請求</h3>
+            <pre id="request-trace"></pre>
+          </div>
+          <div>
+            <h3>Runtime Core 回條（receipt）</h3>
+            <pre id="response-trace"></pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>5. 可持久保存的稽核紀錄</h2>
+        <div style="overflow-x: auto;">
+          <table class="audit">
+            <thead>
+              <tr><th>Revision（版本）</th><th>處置結果</th><th>輸入</th><th>權威結果</th></tr>
+            </thead>
+            <tbody id="audit-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    // Portable, pure logic module. It has no DOM knowledge.
+    const RuntimeCorePrototype = (() => {
+      const clone = value => structuredClone(value);
+
+      function fresh() {
+        const state = {
+          revision: 0,
+          runId: null,
+          stage: "No Run",
+          condition: "Idle",
+          reviewRound: null,
+          outcome: null,
+          lastTransition: "尚無",
+          currentActor: "Operator",
+          nextExpected: "提交目標",
+          remediationUsed: false,
+          offers: {},
+          executions: {},
+          directives: {},
+          lastDirectiveByRole: {},
+          reviewers: {
+            A: { status: "Not started", report: null, context: [] },
+            B: { status: "Not started", report: null, context: [] }
+          },
+          reviewTarget: null,
+          receipts: {},
+          audit: [],
+          evidence: []
+        };
+        refreshOffers(state);
+        return state;
+      }
+
+      function token(state, action) {
+        return `offer:${state.runId || "none"}:${state.revision}:${action}`;
+      }
+
+      function refreshOffers(state) {
+        const offered = [];
+        if (!state.runId) {
+          offered.push("SubmitObjective");
+        } else if (state.condition === "Waiting for Operator") {
+          if (state.stage === "Planning") offered.push("ConfirmRunPlan", "Abandon");
+          if (state.stage === "Final Decision") offered.push("AcceptReviewTarget", "Abandon");
+          offered.push("RequestCancellation");
+        } else if (!["Terminal", "Cancelling"].includes(state.condition)) {
+          offered.push("RequestCancellation", "Abandon");
+        }
+        state.offers = Object.fromEntries(offered.map(action => [action, token(state, action)]));
+      }
+
+      function addExecution(state, role, id) {
+        const directiveId = `directive:${id}`;
+        state.executions[id] = {
+          id,
+          role,
+          status: "Running",
+          completion: false,
+          directiveId
+        };
+        state.directives[directiveId] = {
+          directiveId,
+          executionId: id,
+          role,
+          status: "Offered",
+          effectKey: `effect:${id}`,
+          fence: 1
+        };
+        state.lastDirectiveByRole[role] = directiveId;
+        return directiveId;
+      }
+
+      function finishExecution(state, directiveId) {
+        const directive = state.directives[directiveId];
+        if (!directive) return;
+        directive.status = "Observed";
+        state.executions[directive.executionId].status = "Completed";
+        state.executions[directive.executionId].completion = true;
+      }
+
+      function digest(message) {
+        return JSON.stringify({
+          source: message.source,
+          kind: message.kind,
+          offer: message.offer || null,
+          directiveId: message.directiveId || null,
+          fence: message.fence || null,
+          payload: message.payload || null
+        });
+      }
+
+      function receipt(state, disposition, summary, extra = {}) {
+        return {
+          disposition,
+          revision: state.revision,
+          stage: state.stage,
+          condition: state.condition,
+          summary,
+          ...extra
+        };
+      }
+
+      function reject(state, code, summary) {
+        return {
+          state,
+          response: receipt(state, "rejected", summary, { code })
+        };
+      }
+
+      function commit(state, message, disposition, summary) {
+        state.revision += 1;
+        state.lastTransition = summary;
+        state.audit.push({
+          revision: state.revision,
+          disposition,
+          input: message.kind,
+          summary
+        });
+        refreshOffers(state);
+        const response = receipt(state, disposition, summary);
+        state.receipts[message.requestId] = {
+          digest: digest(message),
+          response: clone(response)
+        };
+        return { state, response };
+      }
+
+      function requireOffer(state, message) {
+        const expected = state.offers[message.kind];
+        if (!expected) return { ok: false, code: "ActionNotOffered" };
+        if (message.offer !== expected) return { ok: false, code: "StaleOffer" };
+        return { ok: true };
+      }
+
+      function requireDirective(state, message, expectedRole) {
+        const directive = state.directives[message.directiveId];
+        if (!directive) return { ok: false, code: "UnknownDirective" };
+        if (directive.fence !== message.fence) return { ok: false, code: "FenceMismatch" };
+        if (expectedRole && directive.role !== expectedRole) {
+          return { ok: false, code: "AttributionMismatch" };
+        }
+        return { ok: true, directive };
+      }
+
+      function apply(current, message) {
+        const state = clone(current);
+        const prior = state.receipts[message.requestId];
+        if (prior) {
+          if (prior.digest !== digest(message)) {
+            return reject(current, "IdempotencyConflict", "同一個 request id 被套用在不同內容上。");
+          }
+          return {
+            state: current,
+            response: {
+              ...prior.response,
+              disposition: "duplicate",
+              summary: "完全相同的重送會回傳原本可持久保存的 receipt；沒有重複狀態轉移或外部效果。"
+            }
+          };
+        }
+
+        if (message.source === "operator") {
+          const offered = requireOffer(state, message);
+          if (!offered.ok) {
+            return reject(current, offered.code, offered.code === "StaleOffer"
+              ? "這個 capability 來自較舊的 revision；Runtime Core 狀態沒有改變。"
+              : "Runtime Core 在目前狀態下並未提供這個 Operator Action。");
+          }
+        }
+
+        switch (message.kind) {
+          case "SubmitObjective": {
+            state.runId = "RUN-001";
+            state.stage = "Planning";
+            state.condition = "Active";
+            state.currentActor = "Orchestrator Agent";
+            state.nextExpected = "經驗證的 Run Plan 候選結果";
+            addExecution(state, "Orchestrator", "EXEC-PLAN-1");
+            return commit(state, message, "advanced", "已建立 Run，並持久記錄 Planning Execution 的執行指示。");
+          }
+          case "PlanObserved": {
+            const checked = requireDirective(state, message, "Orchestrator");
+            if (!checked.ok) return reject(current, checked.code, "此事實無法歸屬到目前有效的 Planning directive。");
+            if (state.condition === "Cancelling" || state.condition === "Terminal") {
+              state.evidence.push("Late Run Plan candidate");
+              return commit(state, message, "late-evidence", "已記錄晚到的 Run Plan 候選結果，但未改變生命週期。");
+            }
+            if (state.stage !== "Planning" || state.condition !== "Active") {
+              return reject(current, "FactNotExpected", "目前不應收到 Run Plan 候選結果。");
+            }
+            finishExecution(state, message.directiveId);
+            state.condition = "Waiting for Operator";
+            state.currentActor = "Operator";
+            state.nextExpected = "確認或放棄 Run Plan";
+            return commit(state, message, "advanced", "已驗證 Run Plan 候選結果；Execution Completion 由 Runtime Core 判定。");
+          }
+          case "ConfirmRunPlan": {
+            state.stage = "Coding";
+            state.condition = "Active";
+            state.currentActor = "Coding Agent";
+            state.nextExpected = "經驗證的 Candidate Change";
+            addExecution(state, "Coding", "EXEC-CODE-1");
+            return commit(state, message, "advanced", "已確認 Run Plan，並持久記錄 Coding Execution 的執行指示。");
+          }
+          case "TransportEnded": {
+            const checked = requireDirective(state, message);
+            if (!checked.ok) return reject(current, checked.code, "此傳輸觀察無法歸屬到任何 directive。");
+            state.evidence.push(`Transport ended for ${checked.directive.executionId}`);
+            return commit(state, message, "audit-only", "已記錄傳輸觀察；Execution Completion 仍未成立。");
+          }
+          case "CodingResultObserved": {
+            const checked = requireDirective(state, message, "Coding");
+            if (!checked.ok) return reject(current, checked.code, "此結果無法歸屬到 Coding directive。");
+            if (state.condition === "Cancelling" || state.condition === "Terminal") {
+              state.evidence.push("Late Candidate Change");
+              return commit(state, message, "late-evidence", "已將晚到的 Candidate Change 保留為證據；Run 沒有因此推進。");
+            }
+            if (state.stage !== "Coding" || state.condition !== "Active") {
+              return reject(current, "FactNotExpected", "目前不應收到 Coding 結果。");
+            }
+            finishExecution(state, message.directiveId);
+            state.stage = "Reviewing";
+            state.condition = "Active";
+            state.reviewRound = "initial";
+            state.reviewTarget = "RT-INITIAL";
+            state.currentActor = "Reviewer Agents A 與 B";
+            state.nextExpected = "兩份彼此隔離的 Review Reports";
+            const shared = ["Run Plan RP-1", "Review Target RT-INITIAL", "固定不變的輸入證據 EV-1"];
+            state.reviewers.A = { status: "Running", report: null, context: [...shared] };
+            state.reviewers.B = { status: "Running", report: null, context: [...shared] };
+            addExecution(state, "Reviewer A", "EXEC-REVIEW-A-1");
+            addExecution(state, "Reviewer B", "EXEC-REVIEW-B-1");
+            return commit(state, message, "advanced", "已驗證 Candidate Change、封存 RT-INITIAL，並提供兩個彼此隔離的 Reviewer Executions。");
+          }
+          case "ReviewerAReportObserved":
+          case "ReviewerBReportObserved": {
+            const reviewer = message.kind === "ReviewerAReportObserved" ? "A" : "B";
+            const role = `Reviewer ${reviewer}`;
+            const checked = requireDirective(state, message, role);
+            if (!checked.ok) return reject(current, checked.code, "這份 Report 無法歸屬到此 Reviewer directive。");
+            if (state.condition === "Cancelling" || state.condition === "Terminal") {
+              state.evidence.push(`Late Reviewer ${reviewer} Report`);
+              return commit(state, message, "late-evidence", `已保留 Reviewer ${reviewer} 晚到的 Report，但未改變 Run。`);
+            }
+            if (state.stage !== "Reviewing" || state.reviewers[reviewer].status !== "Running") {
+              return reject(current, "FactNotExpected", "目前不應收到這份 Reviewer Report。");
+            }
+            finishExecution(state, message.directiveId);
+            state.reviewers[reviewer].status = "Accepted";
+            state.reviewers[reviewer].report = `REPORT-${reviewer}-INITIAL`;
+            if (state.reviewers.A.report && state.reviewers.B.report) {
+              state.stage = "Synthesizing";
+              state.currentActor = "Orchestrator Agent";
+              state.nextExpected = "Review Synthesis";
+              addExecution(state, "Synthesis", "EXEC-SYNTH-1");
+              return commit(state, message, "advanced", "已接受第二份隔離產生的 Review Report，並提供 Review Synthesis Execution。");
+            }
+            return commit(state, message, "advanced", `已接受 Reviewer ${reviewer} 的 Report；另一位 Reviewer 的執行脈絡仍維持固定不變。`);
+          }
+          case "SynthesisCleanObserved": {
+            const checked = requireDirective(state, message, "Synthesis");
+            if (!checked.ok) return reject(current, checked.code, "這份 Synthesis 無法歸屬到目前有效的 directive。");
+            if (state.condition === "Cancelling" || state.condition === "Terminal") {
+              state.evidence.push("Late Review Synthesis");
+              return commit(state, message, "late-evidence", "已保留晚到的 Review Synthesis，但未改變 Run。");
+            }
+            if (state.stage !== "Synthesizing") {
+              return reject(current, "FactNotExpected", "目前不應收到 Review Synthesis。");
+            }
+            finishExecution(state, message.directiveId);
+            state.stage = "Final Decision";
+            state.condition = "Waiting for Operator";
+            state.currentActor = "Operator";
+            state.nextExpected = "接受或放棄";
+            return commit(state, message, "advanced", "已驗證 Review Synthesis，並開放最終 Operator Decision。");
+          }
+          case "AcceptReviewTarget": {
+            state.condition = "Terminal";
+            state.outcome = "Accepted";
+            state.currentActor = "無";
+            state.nextExpected = "無";
+            return commit(state, message, "advanced", "已提交唯一的 Run Outcome：Accepted。");
+          }
+          case "Abandon": {
+            if (state.condition === "Active") {
+              state.condition = "Cancelling";
+              state.currentActor = "Runtime Core";
+              state.nextExpected = "已停止或已隔離的證明";
+              return commit(state, message, "advanced", "已記錄 Abandonment 意圖；仍在作用的效果必須先收斂，才能終止為 Abandoned。");
+            }
+            state.condition = "Terminal";
+            state.outcome = "Abandoned";
+            state.currentActor = "無";
+            state.nextExpected = "無";
+            return commit(state, message, "advanced", "已提交唯一的 Run Outcome：Abandoned。");
+          }
+          case "RequestCancellation": {
+            state.condition = "Cancelling";
+            state.currentActor = "Runtime Core";
+            state.nextExpected = "所有可能效果皆已停止或已隔離的證明";
+            return commit(state, message, "advanced", "已接受 Cancellation 並阻擋生命週期繼續推進；要進入終止取消仍需完成收斂。");
+          }
+          case "StopObserved": {
+            const checked = requireDirective(state, message);
+            if (!checked.ok) return reject(current, checked.code, "停止證明無法歸屬到已知的 directive。");
+            if (state.condition !== "Cancelling") {
+              return reject(current, "FactNotExpected", "當 Run 不在 Cancelling 狀態時，停止證明不代表 Cancellation。");
+            }
+            state.condition = "Terminal";
+            state.outcome = "Cancelled";
+            state.currentActor = "無";
+            state.nextExpected = "無";
+            return commit(state, message, "advanced", "已驗證停止或隔離證明，並提交 Run Outcome：Cancelled。");
+          }
+          case "InspectReviewerContexts": {
+            return {
+              state: current,
+              response: receipt(current, "observed", "已回傳依 caller 授權裁切的投影；沒有改變任何可持久保存的狀態。", {
+                reviewerContexts: clone(current.reviewers)
+              })
+            };
+          }
+          default:
+            return reject(current, "UnknownInput", "Runtime Core 無法辨識這項輸入。");
+        }
+      }
+
+      return { fresh, apply };
+    })();
+
+    // Pure interface facades. They change caller knowledge, not domain behavior.
+    const InterfaceLenses = {
+      rendezvous: {
+        name: "Capability rendezvous",
+        subtitle: "單一通用進入點",
+        signature: "rendezvous(Pull | Answer)\n  → Offer | Receipt",
+        description: "Core 提供 capability，每個 caller 只需回應。方法數最少，但 Operator 與 Adapter 必須共用同一套抽象協定。",
+        encode(event, state, options = {}) {
+          const requestId = options.requestId || nextId(event.kind);
+          const grant = options.offerOverride ?? state.offers[event.kind] ?? directiveFor(event, state)?.directiveId ?? null;
+          const external = [
+            { call: "rendezvous", request: { kind: "pull", principal: event.source, afterRevision: state.revision } },
+            { call: "rendezvous", request: { kind: "answer", requestId, grant, body: event.kind } }
+          ];
+          return { external, canonical: canonical(event, state, { ...options, requestId, offer: grant }) };
+        }
+      },
+      mailbox: {
+        name: "具版本的 mailbox",
+        subtitle: "分開 command、query 與 effect",
+        signature: "propose(CommandEnvelope)\ninspect(Query)\nleaseEffects(Request)",
+        description: "面對多種 caller 時彈性高且明確，代價是協定較大，也容易在這條 seam 洩漏復原（recovery）機制。",
+        encode(event, state, options = {}) {
+          const requestId = options.requestId || nextId(event.kind);
+          const directive = directiveFor(event, state);
+          const external = event.source === "operator"
+            ? [
+                { call: "inspect", query: { kind: "run-view", atLeastRevision: state.revision } },
+                { call: "propose", envelope: { schemaVersion: 1, requestId, command: event.kind, expectedRevision: state.revision, actionToken: options.offerOverride ?? state.offers[event.kind] ?? null } }
+              ]
+            : [
+                { call: "leaseEffects", request: { maxItems: 1, role: event.role || "current" }, leased: directive?.directiveId ?? null },
+                { call: "propose", envelope: { schemaVersion: 1, requestId, command: "adapter/record-observation", observation: event.kind, directiveId: directive?.directiveId ?? null, fence: directive?.fence ?? null } }
+              ];
+          return { external, canonical: canonical(event, state, { ...options, requestId }) };
+        }
+      },
+      exchange: {
+        name: "依 caller 區分的 exchange",
+        subtitle: "建議的混合設計",
+        signature: "operator(Observe | Act)\nexecution(Pull | Report)",
+        description: "Operator 呈現不透明的 Action offers；Adapter 接收 directive 並回報事實。可持久保存的 receipt 與 cursor 是共用語意，不是傳輸機制。",
+        encode(event, state, options = {}) {
+          const requestId = options.requestId || nextId(event.kind);
+          const directive = directiveFor(event, state);
+          const external = event.source === "operator"
+            ? [
+                { call: "operator", request: { kind: "Observe", afterRevision: state.revision } },
+                { call: "operator", request: { kind: "Act", requestId, offer: options.offerOverride ?? state.offers[event.kind] ?? null, action: event.kind } }
+              ]
+            : event.kind === "InspectReviewerContexts"
+              ? [{ call: "operator", request: { kind: "Observe", projection: "review-participation" } }]
+              : [
+                  { call: "execution", request: { kind: "Pull", role: event.role || "current" }, directive: directive?.directiveId ?? null },
+                  { call: "execution", request: { kind: "Report", requestId, directiveId: directive?.directiveId ?? null, fence: directive?.fence ?? null, fact: event.kind } }
+                ];
+          return { external, canonical: canonical(event, state, { ...options, requestId }) };
+        }
+      }
+    };
+
+    let idCounter = 1;
+    const nextId = prefix => `req:${prefix}:${idCounter++}`;
+
+    const EVENTS = {
+      SubmitObjective: { source: "operator", kind: "SubmitObjective", label: "提交目標" },
+      PlanObserved: { source: "adapter", role: "Orchestrator", kind: "PlanObserved", label: "回報 Run Plan 候選結果" },
+      ConfirmRunPlan: { source: "operator", kind: "ConfirmRunPlan", label: "確認 Run Plan" },
+      TransportEnded: { source: "adapter", role: "Coding", kind: "TransportEnded", label: "回報傳輸已結束" },
+      CodingResultObserved: { source: "adapter", role: "Coding", kind: "CodingResultObserved", label: "回報 Candidate Change" },
+      ReviewerAReportObserved: { source: "adapter", role: "Reviewer A", kind: "ReviewerAReportObserved", label: "回報 Reviewer A 結果" },
+      ReviewerBReportObserved: { source: "adapter", role: "Reviewer B", kind: "ReviewerBReportObserved", label: "回報 Reviewer B 結果" },
+      SynthesisCleanObserved: { source: "adapter", role: "Synthesis", kind: "SynthesisCleanObserved", label: "回報無需修正的 Synthesis" },
+      AcceptReviewTarget: { source: "operator", kind: "AcceptReviewTarget", label: "接受 Review Target" },
+      RequestCancellation: { source: "operator", kind: "RequestCancellation", label: "要求取消" },
+      StopObserved: { source: "adapter", kind: "StopObserved", label: "回報已停止／已隔離的證明" },
+      InspectReviewerContexts: { source: "observer", kind: "InspectReviewerContexts", label: "檢視 Reviewer 執行脈絡" }
+    };
+
+    function directiveFor(event, state) {
+      let directiveId = null;
+      if (event.role) directiveId = state.lastDirectiveByRole[event.role];
+      if (!directiveId && event.kind === "StopObserved") {
+        directiveId = ["Coding", "Orchestrator", "Reviewer A", "Reviewer B", "Synthesis"]
+          .map(role => state.lastDirectiveByRole[role])
+          .filter(Boolean)
+          .at(-1);
+      }
+      return directiveId ? state.directives[directiveId] : null;
+    }
+
+    function canonical(event, state, options) {
+      const directive = directiveFor(event, state);
+      return {
+        source: event.source,
+        kind: event.kind,
+        requestId: options.requestId,
+        offer: options.offerOverride ?? state.offers[event.kind] ?? null,
+        directiveId: options.directiveIdOverride ?? directive?.directiveId ?? null,
+        fence: options.fenceOverride ?? directive?.fence ?? null,
+        payload: options.payload ?? null
+      };
+    }
+
+    let state = RuntimeCorePrototype.fresh();
+    let activeLens = "exchange";
+    let lastRequest = null;
+    let lastResponse = null;
+    let activeScenario = "stale";
+    let scenarioStep = 0;
+    let scenarioMemory = {};
+
+    const scenarios = {
+      stale: {
+        title: "過期的 Operator 競爭",
+        copy: "同一個 revision 同時提供確認與 Cancellation。先使用其中一個，再嘗試使用過期 capability。第二個 caller 不應為了避免雙重決策而必須知道狀態轉移圖。",
+        setup() {
+          prepare("planning-wait");
+          scenarioMemory.cancelOffer = state.offers.RequestCancellation;
+        },
+        steps: [
+          { label: "使用目前的 offer 確認", detail: "Runtime Core 會推進到 Coding。", run: () => perform(EVENTS.ConfirmRunPlan) },
+          { label: "重用舊的 Cancellation offer", detail: "預期結果：StaleOffer，revision 不變。", run: () => perform(EVENTS.RequestCancellation, { offerOverride: scenarioMemory.cancelOffer }) }
+        ]
+      },
+      duplicate: {
+        title: "回條（receipt）遺失與重送",
+        copy: "Coding 結果已提交，但 Adapter 假設 receipt 遺失，因而再次送出完全相同的事實。重送必須回傳重複回條（duplicate receipt），不得產生第二次狀態轉移或 directive。",
+        setup() { prepare("coding"); },
+        steps: [
+          { label: "回報 Candidate Change", detail: "使用固定的 request id 作為事實身分。", run: () => perform(EVENTS.CodingResultObserved, { requestId: "fact:coding:fixed" }) },
+          { label: "重送完全相同的事實", detail: "預期結果：duplicate；revision 不變。", run: () => perform(EVENTS.CodingResultObserved, { requestId: "fact:coding:fixed", directiveIdOverride: "directive:EXEC-CODE-1", fenceOverride: 1 }) }
+        ]
+      },
+      cancellation: {
+        title: "Cancellation 與晚到輸出",
+        copy: "Cancellation 在可持久保存的順序中先成立，之後才收到有效的 Coding 結果。結果可保留為證據，但只有已停止或已隔離的證明才能完成 Cancellation。",
+        setup() { prepare("coding"); },
+        steps: [
+          { label: "要求 Cancellation", detail: "Run 會成為 Cancelling，而不是立刻 Cancelled。", run: () => perform(EVENTS.RequestCancellation) },
+          { label: "回報晚到的 Candidate Change", detail: "預期結果：late-evidence；生命週期不推進。", run: () => perform(EVENTS.CodingResultObserved, { requestId: "fact:late-code", directiveIdOverride: "directive:EXEC-CODE-1", fenceOverride: 1 }) },
+          { label: "回報已停止／已隔離的證明", detail: "直到此刻 Runtime Core 才能提交 Cancelled。", run: () => perform(EVENTS.StopObserved, { directiveIdOverride: "directive:EXEC-CODE-1", fenceOverride: 1 }) }
+        ]
+      },
+      isolation: {
+        title: "決策隔離審查",
+        copy: "兩位 Reviewer 的執行脈絡（context）都由同一個 Review Target 固定下來。接受 Reviewer A 的 Report 後再檢視 Reviewer B：其中仍不得出現另一位 Reviewer 的 Report。",
+        setup() { prepare("reviewing"); },
+        steps: [
+          { label: "檢視兩份固定不變的執行脈絡", detail: "兩者共用 RT-INITIAL，且都不含另一位 Reviewer 的 Report。", run: () => perform(EVENTS.InspectReviewerContexts) },
+          { label: "接受 Reviewer A 的 Report", detail: "Reviewer B 必須繼續使用原本的執行脈絡。", run: () => perform(EVENTS.ReviewerAReportObserved) },
+          { label: "再次檢視 Reviewer B", detail: "B 的執行脈絡不得出現 REPORT-A-INITIAL。", run: () => perform(EVENTS.InspectReviewerContexts) },
+          { label: "接受 Reviewer B 的 Report", detail: "只有兩份 Reports 都成立後才能啟動 Review Synthesis。", run: () => perform(EVENTS.ReviewerBReportObserved) }
+        ]
+      }
+    };
+
+    const prepEvent = (event, options = {}) => {
+      const encoded = InterfaceLenses.exchange.encode(event, state, options);
+      state = RuntimeCorePrototype.apply(state, encoded.canonical).state;
+    };
+
+    function prepare(target) {
+      state = RuntimeCorePrototype.fresh();
+      lastRequest = null;
+      lastResponse = null;
+      scenarioMemory = {};
+      idCounter = 1;
+      prepEvent(EVENTS.SubmitObjective);
+      prepEvent(EVENTS.PlanObserved);
+      if (target === "planning-wait") return;
+      prepEvent(EVENTS.ConfirmRunPlan);
+      if (target === "coding") return;
+      prepEvent(EVENTS.CodingResultObserved);
+    }
+
+    function perform(event, options = {}) {
+      const encoded = InterfaceLenses[activeLens].encode(event, state, options);
+      const applied = RuntimeCorePrototype.apply(state, encoded.canonical);
+      state = applied.state;
+      lastRequest = encoded.external;
+      lastResponse = applied.response;
+      render();
+      return applied;
+    }
+
+    function selectScenario(key) {
+      activeScenario = key;
+      scenarioStep = 0;
+      scenarios[key].setup();
+      render();
+    }
+
+    function runScenarioStep(index) {
+      if (index !== scenarioStep) return;
+      scenarios[activeScenario].steps[index].run();
+      scenarioStep += 1;
+      render();
+    }
+
+    function resetFreePlay() {
+      state = RuntimeCorePrototype.fresh();
+      lastRequest = null;
+      lastResponse = null;
+      scenarioStep = 0;
+      render();
+    }
+
+    function pretty(value) {
+      return value == null ? "—" : JSON.stringify(value, null, 2);
+    }
+
+    const STAGE_LABELS = {
+      "No Run": "尚無 Run",
+      "Planning": "規劃（Planning）",
+      "Coding": "撰寫程式（Coding）",
+      "Reviewing": "審查（Reviewing）",
+      "Synthesizing": "彙整（Synthesizing）",
+      "Remediating": "修正（Remediating）",
+      "Final Decision": "最終決策（Final Decision）"
+    };
+
+    const CONDITION_LABELS = {
+      "Idle": "閒置（Idle）",
+      "Active": "進行中（Active）",
+      "Waiting for Operator": "等待 Operator",
+      "Cancelling": "取消收斂中（Cancelling）",
+      "Terminal": "已終止（Terminal）"
+    };
+
+    const OUTCOME_LABELS = {
+      "Accepted": "已接受（Accepted）",
+      "Abandoned": "已放棄（Abandoned）",
+      "Cancelled": "已取消（Cancelled）"
+    };
+
+    const ROUND_LABELS = {
+      "initial": "初次（initial）",
+      "remediated": "修正後（remediated）"
+    };
+
+    const DISPOSITION_LABELS = {
+      "advanced": "已推進",
+      "rejected": "已拒絕",
+      "duplicate": "重複",
+      "late-evidence": "晚到證據",
+      "audit-only": "僅記錄稽核",
+      "observed": "已讀取"
+    };
+
+    const PARTICIPATION_LABELS = {
+      "Not started": "尚未開始",
+      "Running": "執行中",
+      "Accepted": "已接受"
+    };
+
+    function actionLabel(kind) {
+      return Object.values(EVENTS).find(event => event.kind === kind)?.label || kind;
+    }
+
+    function metric(label, value) {
+      return `<div class="metric"><span>${label}</span><strong>${value ?? "—"}</strong></div>`;
+    }
+
+    function renderReviewer(key) {
+      const reviewer = state.reviewers[key];
+      const context = reviewer.context.length
+        ? reviewer.context.map(item => `<div>• ${item}</div>`).join("")
+        : '<div class="empty">尚無 Review 執行脈絡。</div>';
+      return `
+        <h3>Reviewer ${key}</h3>
+        <div class="status">參與狀態：<strong>${PARTICIPATION_LABELS[reviewer.status] || reviewer.status}</strong></div>
+        <div class="status">已接受的 Report：<strong>${reviewer.report || "尚無"}</strong></div>
+        <div class="context-list"><strong>固定不變的 Adapter 輸入</strong>${context}</div>
+      `;
+    }
+
+    function render() {
+      document.getElementById("lens-cards").innerHTML = Object.entries(InterfaceLenses).map(([key, lens]) => `
+        <button class="lens-card ${key === activeLens ? "active" : ""} ${key === "exchange" ? "recommended" : ""}" data-lens="${key}">
+          <h3>${lens.name}</h3>
+          <p><strong>${lens.subtitle}</strong></p>
+          <code class="signature">${lens.signature}</code>
+          <p style="margin: 10px 0 0;">${lens.description}</p>
+        </button>
+      `).join("");
+      document.querySelectorAll("[data-lens]").forEach(button => {
+        button.onclick = () => {
+          activeLens = button.dataset.lens;
+          render();
+        };
+      });
+
+      document.getElementById("scenario-tabs").innerHTML = Object.entries(scenarios).map(([key, scenario]) => `
+        <button class="scenario-tab ${key === activeScenario ? "active" : ""}" data-scenario="${key}">${scenario.title}</button>
+      `).join("");
+      document.querySelectorAll("[data-scenario]").forEach(button => {
+        button.onclick = () => selectScenario(button.dataset.scenario);
+      });
+      document.getElementById("scenario-copy").textContent = scenarios[activeScenario].copy;
+      document.getElementById("scenario-steps").innerHTML = scenarios[activeScenario].steps.map((step, index) => `
+        <button class="step ${index === scenarioStep ? "current" : ""} ${index < scenarioStep ? "done" : ""}" data-step="${index}" ${index > scenarioStep ? "disabled" : ""}>
+          <span class="step-number">${index < scenarioStep ? "✓" : index + 1}</span>
+          <span><strong>${step.label}</strong><br><small>${step.detail}</small></span>
+          <span>執行</span>
+        </button>
+      `).join("");
+      document.querySelectorAll("[data-step]").forEach(button => {
+        button.onclick = () => runScenarioStep(Number(button.dataset.step));
+      });
+
+      const free = [
+        ["重設", null],
+        [EVENTS.SubmitObjective.label, EVENTS.SubmitObjective],
+        [EVENTS.PlanObserved.label, EVENTS.PlanObserved],
+        [EVENTS.ConfirmRunPlan.label, EVENTS.ConfirmRunPlan],
+        [EVENTS.TransportEnded.label, EVENTS.TransportEnded],
+        [EVENTS.CodingResultObserved.label, EVENTS.CodingResultObserved],
+        [EVENTS.ReviewerAReportObserved.label, EVENTS.ReviewerAReportObserved],
+        [EVENTS.ReviewerBReportObserved.label, EVENTS.ReviewerBReportObserved],
+        [EVENTS.SynthesisCleanObserved.label, EVENTS.SynthesisCleanObserved],
+        [EVENTS.AcceptReviewTarget.label, EVENTS.AcceptReviewTarget],
+        [EVENTS.RequestCancellation.label, EVENTS.RequestCancellation],
+        [EVENTS.StopObserved.label, EVENTS.StopObserved],
+        [EVENTS.InspectReviewerContexts.label, EVENTS.InspectReviewerContexts]
+      ];
+      document.getElementById("free-play").innerHTML = free.map(([label, event], index) => `
+        <button class="action ${index === 0 ? "primary" : ""} ${event?.kind === "RequestCancellation" ? "danger" : ""}" data-free="${index}">${label}</button>
+      `).join("");
+      document.querySelectorAll("[data-free]").forEach(button => {
+        button.onclick = () => {
+          const [, event] = free[Number(button.dataset.free)];
+          if (!event) resetFreePlay();
+          else perform(event);
+        };
+      });
+
+      document.getElementById("metrics").innerHTML = [
+        metric("Revision（版本）", state.revision),
+        metric("Run 階段", STAGE_LABELS[state.stage] || state.stage),
+        metric("Run 狀態", CONDITION_LABELS[state.condition] || state.condition),
+        metric("Run Outcome", state.outcome ? OUTCOME_LABELS[state.outcome] : "尚未提交"),
+        metric("Review Round", state.reviewRound ? ROUND_LABELS[state.reviewRound] : "—"),
+        metric("Review Target", state.reviewTarget || "—"),
+        metric("目前行動者", state.currentActor),
+        metric("下一個預期動作", state.nextExpected)
+      ].join("");
+
+      const offers = Object.entries(state.offers);
+      document.getElementById("offers").innerHTML = offers.length
+        ? offers.map(([action, value]) => `<span class="pill" title="${value}">${actionLabel(action)}</span>`).join("")
+        : '<span class="empty">目前沒有提供任何 Operator Action。</span>';
+      document.getElementById("reviewer-a").innerHTML = renderReviewer("A");
+      document.getElementById("reviewer-b").innerHTML = renderReviewer("B");
+
+      const result = document.getElementById("result");
+      if (!lastResponse) {
+        result.className = "result";
+        result.textContent = "尚未進行任何 exchange。";
+      } else {
+        const tone = lastResponse.disposition === "rejected"
+          ? "bad"
+          : ["late-evidence", "audit-only"].includes(lastResponse.disposition) ? "warn" : "ok";
+        result.className = `result ${tone}`;
+        result.innerHTML = `<strong>${DISPOSITION_LABELS[lastResponse.disposition] || lastResponse.disposition}</strong> — ${lastResponse.summary}`;
+      }
+
+      document.getElementById("request-trace").textContent = pretty(lastRequest);
+      document.getElementById("response-trace").textContent = pretty(lastResponse);
+      document.getElementById("audit-body").innerHTML = state.audit.length
+        ? [...state.audit].reverse().map(row => `
+            <tr>
+              <td>${row.revision}</td>
+              <td>${DISPOSITION_LABELS[row.disposition] || row.disposition}</td>
+              <td><code>${row.input}</code></td>
+              <td>${row.summary}</td>
+            </tr>
+          `).join("")
+        : '<tr><td colspan="4" class="empty">尚無可持久保存的決策。</td></tr>';
+    }
+
+    selectScenario("stale");
+  </script>
+</body>
+</html>
