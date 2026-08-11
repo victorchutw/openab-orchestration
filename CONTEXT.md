@@ -87,41 +87,57 @@ Completion while coordinating Executions and external effects.
 _Avoid_: Orchestrator Agent, GitHub gate, agent memory
 
 **Agent Role Identity**:
-A stable logical seat assigned to an Agent Role, independent of pod, provider,
-model, credential, and session location. Distinct identities may carry the same
-Agent Role.
-_Avoid_: Discord bot name, deployment name, model name
+An Installation-stable logical seat assigned to an Agent Role, independent of
+pod, Serving Provider, model, credential, session, and Execution Profile. The
+MVP has one Orchestrator Agent identity, one Coding Agent identity, and two
+Reviewer Agent identities across Runs.
+_Avoid_: Run identity, Execution identity, deployment name, model name
 
 **Agent Runtime**:
-The replaceable process or container environment that hosts an Execution. It
-does not own Agent Role Identity or Run state.
+The replaceable, identity-private process or container environment that hosts
+Executions for one Agent Role Identity. It may retain disposable role-private
+cache but does not own Agent Role Identity or Run state.
 _Avoid_: Runtime Core, Agent Role Identity, ACP session
 
 **Orchestrator Agent**:
-The PM role that shapes the Run Plan, prepares context, coordinates Agent Roles,
-and synthesizes reports without owning Run state or the final decision.
-_Avoid_: Runtime Core, automatic approver
+The PM role that shapes the Run Plan, prepares context, and synthesizes reports.
+It proposes work through the Runtime Core without directly dispatching other
+Agents, modifying the Target Repository, owning Run state, or making the final
+decision.
+_Avoid_: Runtime Core, dispatcher, automatic approver
 
 **Coding Agent**:
-The role that produces and verifies a candidate change in an isolated target
-workspace.
+The role that produces and verifies a Candidate Change in its isolated writable
+Execution Workspace without owning Run state or merge authority.
 _Avoid_: Reviewer Agent, merge authority
 
 **Reviewer Agent**:
 A read-only role that independently evaluates one immutable Review Target and
-produces one Review Report.
+produces one Review Report without directing another Agent or owning Run state.
 _Avoid_: Coding Agent, sibling reviewer, approver
 
 **Review Decision Isolation**:
 The information boundary that keeps each required Reviewer Agent from receiving
-a sibling Review Report, Review Synthesis, or their derivatives before its own
-valid Report is accepted.
+current or prior sibling Review Reports, Review Synthesis, or their derivatives
+during its Execution. That Execution ends when its valid Report is accepted.
 _Avoid_: shared session, automatic consensus, security boundary against Operator
 
+**Serving Provider**:
+The external inference backend that serves model work for an Execution.
+Reviewer diversity compares Serving Providers, not models, accounts,
+credentials, or Agent Runtimes.
+_Avoid_: model, provider account, credential, Agent Runtime
+
 **Execution Profile**:
-A versioned binding of provider, model, Agent Runtime, and configuration
-selected for one Execution.
+A versioned binding of Serving Provider, model, Agent Runtime, and configuration
+selected immutably when one Execution is created.
 _Avoid_: Agent Role Identity, authority grant
+
+**Execution Context**:
+The complete, immutable, authorization-filtered input manifest assigned by the
+Runtime Core to one Execution. Session continuity may accelerate an Execution
+but cannot replace its Execution Context.
+_Avoid_: prompt, transcript, session memory, mutable workspace
 
 **Execution Adapter**:
 The replaceable connection through which the Runtime Core invokes an Agent Role
@@ -129,9 +145,9 @@ Identity in an Agent Runtime over a protocol or interface such as ACP.
 _Avoid_: Agent Role, Runtime Core, protocol
 
 **Execution Workspace**:
-An isolated filesystem view of a Target Repository provided to one Execution
-when repository access is required. Coding Executions may write; Reviewer
-Executions are read-only.
+The isolated filesystem view of a Target Repository created for one Execution
+when repository access is required. Coding Executions may write; each Reviewer
+Execution receives a separate read-only view of the same Review Target.
 _Avoid_: Target Repository, shared checkout, OpenAB session
 
 **Product Repository**:
