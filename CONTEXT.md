@@ -17,6 +17,12 @@ An intervention the Operator is authorized to make while a Run is active or
 waiting, including control inputs that are not the final Operator Decision.
 _Avoid_: chat message, automatic transition, Operator Decision
 
+**Operator Interface**:
+A replaceable presentation boundary that renders authorization-filtered
+Runtime Core observations and submits Operator Actions without owning Run
+state, action authority, or the Operator Decision.
+_Avoid_: Runtime Core, ACP conversation, Agent control channel
+
 **Run**:
 One traceable pursuit of an Operator objective under one confirmed Run Plan,
 from creation to exactly one Run Outcome. A Run may end before coding or review.
@@ -75,11 +81,23 @@ One bounded invocation of an Agent Role Identity under one Execution Profile
 within a Run.
 _Avoid_: Work Claim, pod, session, message
 
+**Execution Result**:
+An immutable, attributable, role-specific envelope of claims, artifact
+references, and evidence reported by one Execution for Runtime Core validation.
+It may be invalid and does not itself establish Execution Completion.
+_Avoid_: ACP response, Execution Completion, Run Outcome
+
 **Execution Completion**:
 The Runtime Core's validated determination that an Execution produced its
 required result and evidence. A transport response, session boundary, or health
 observation alone is not completion.
 _Avoid_: ACP turn completion, process exit, health check
+
+**Execution Isolation**:
+Evidence-backed containment that prevents a possibly continuing Execution from
+influencing Runtime Core authority, protected workspaces, External Effects, or
+accepted results without claiming that its processes have stopped.
+_Avoid_: process termination, failure, force deletion
 
 **External Effect**:
 One logically authorized mutation outside the Runtime Core's authoritative
