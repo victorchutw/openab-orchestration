@@ -81,6 +81,41 @@ required result and evidence. A transport response, session boundary, or health
 observation alone is not completion.
 _Avoid_: ACP turn completion, process exit, health check
 
+**External Effect**:
+One logically authorized mutation outside the Runtime Core's authoritative
+transaction, regardless of how many dispatches are needed to establish it.
+_Avoid_: API call, state transition, physical request
+
+**Effect Intent**:
+The Runtime Core's durable authorization for one External Effect under a stable
+logical identity.
+_Avoid_: job, untracked command, Effect Attempt
+
+**Effect Attempt**:
+One physical dispatch pursuing an Effect Intent. Another attempt does not
+authorize another External Effect.
+_Avoid_: External Effect, retry policy, Execution
+
+**Reconciliation**:
+The evidence-led process that resolves an uncertain Execution or External
+Effect to a proven disposition without guessing from timeout or absence alone.
+_Avoid_: retry, timeout recovery, manual override
+
+**Effect Isolation**:
+Evidence-backed containment that prevents possibly continuing work or effects
+from influencing Run authority, protected resources, or accepted results.
+_Avoid_: stopping, failure, cancellation
+
+**Effect Contract**:
+A versioned Adapter contract defining how an External Effect is correlated,
+fenced, proven, and reconciled.
+_Avoid_: request schema, provider documentation, retry loop
+
+**Integrity Incident**:
+An immutable finding that previously accepted state or evidence no longer
+satisfies its integrity claims without rewriting the historical Run Outcome.
+_Avoid_: in-place correction, reopened Run, evidence replacement
+
 **Runtime Core**:
 The sole deterministic authority that records Run lifecycle and Execution
 Completion while coordinating Executions and external effects.
