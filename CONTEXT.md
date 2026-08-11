@@ -175,3 +175,19 @@ _Avoid_: runtime database, agent transcript
 The Operator's final judgment to Accept or Abandon the last eligible Review
 Target after review and Review Synthesis.
 _Avoid_: Operator Action, model recommendation, timeout, merge result
+
+**Reference Run**:
+A controlled evaluation Run performed under fixed inputs and conditions so
+timing, reliability, and operational-effort measures remain comparable.
+_Avoid_: production Run, arbitrary benchmark task
+
+**System-Attributable Duration**:
+The elapsed duration of a Run excluding intervals in `Waiting for Operator`.
+Queueing, Agent Runtime and provider work, validation, and recovery remain
+included.
+_Avoid_: wall-clock Run duration, Operator response time
+
+**Operator Waiting-on-System**:
+The interval after an Operator Action is accepted until the Runtime Core exposes
+the next required Operator Action or commits the Run Outcome.
+_Avoid_: Waiting for Operator, Operator decision time
