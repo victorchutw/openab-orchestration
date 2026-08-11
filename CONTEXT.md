@@ -134,10 +134,36 @@ when repository access is required. Coding Executions may write; Reviewer
 Executions are read-only.
 _Avoid_: Target Repository, shared checkout, OpenAB session
 
+**Product Repository**:
+The public source repository for the portable OpenAB orchestration product and
+its non-sensitive specifications, examples, and contribution materials. It is
+not an installation, a store for private bindings, or a source of runtime state.
+_Avoid_: Target Repository, deployment repository, runtime store
+
+**Installation**:
+One Operator-controlled deployment of the product with its own private
+configuration, bindings, secrets, and runtime records.
+_Avoid_: Product Repository, Agent Runtime, Target Repository
+
+**Configuration Contract**:
+The public, versioned definition of accepted installation settings, their
+constraints, safe defaults, and placeholder shapes without instance values.
+_Avoid_: Installation Configuration, deployment binding, secret
+
+**Installation Configuration**:
+The private, instance-specific settings and deployment bindings for one
+Installation that satisfy a Configuration Contract but exclude secret payloads.
+_Avoid_: Configuration Contract, Secret Material, runtime state
+
+**Secret Material**:
+Private credential payloads used by an Installation and referred to without
+being embedded in configuration, evidence, or the Product Repository.
+_Avoid_: Installation Configuration, secret reference, Agent Role Identity
+
 **Target Repository**:
 The Git repository whose exact revisions and worktree are examined or changed
 by a Run.
-_Avoid_: runtime database, product repository
+_Avoid_: runtime database, Product Repository
 
 **Candidate Change**:
 The mutable source change produced by Coding or Remediation before it is sealed
@@ -167,9 +193,10 @@ that target.
 _Avoid_: mutable log, Agent assertion, active Run state
 
 **Evidence Bundle**:
-An immutable collection of outputs, verification results, bindings, and
-digests that supports inspection of a Run without becoming its active state.
-_Avoid_: runtime database, agent transcript
+The private, immutable collection of outputs, verification results, bindings,
+and digests that supports offline inspection of one terminal Run without
+becoming its active state or containing Secret Material.
+_Avoid_: runtime database, agent transcript, public example
 
 **Operator Decision**:
 The Operator's final judgment to Accept or Abandon the last eligible Review
