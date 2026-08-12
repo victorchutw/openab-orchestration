@@ -258,7 +258,7 @@
         "reference": {
           "type": "string",
           "minLength": 1,
-          "description": "Private worker-owned locator; never a secret payload."
+          "description": "Private worker-owned locator; environment providers require an uppercase variable name and file providers require an absolute private path. Never a secret payload."
         },
         "generation": {
           "type": "string",
@@ -266,6 +266,28 @@
           "description": "Non-secret generation identifier exposed to Runtime Core."
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "provider": { "const": "environment" } },
+            "required": ["provider"]
+          },
+          "then": {
+            "properties": {
+              "reference": { "pattern": "^[A-Z_][A-Z0-9_]*$" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "provider": { "const": "file" } },
+            "required": ["provider"]
+          },
+          "then": {
+            "properties": { "reference": { "pattern": "^/" } }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "placeholderSecretReference": {

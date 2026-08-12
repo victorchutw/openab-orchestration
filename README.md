@@ -5,7 +5,7 @@ independent, unofficial OpenAB integration and is not endorsed by the upstream
 OpenAB project.
 
 The planning destination is complete and greenfield implementation has begun.
-The current `0.1.0` bootstrap provides a buildable product entry point and a
+The current bootstrap provides a buildable, versioned product entry point and a
 fail-closed Installation preflight before any Runtime Core or worker starts.
 The complete MVP remains one coding and review loop:
 
@@ -57,10 +57,10 @@ dependencies.
 
 ```bash
 npm run check
-npm run build
+artifact_path="$(npm run build --silent)"
 npm test
-dist/openab-orchestration-v0.1.0.mjs modes
-dist/openab-orchestration-v0.1.0.mjs preflight \
+"$artifact_path" modes
+"$artifact_path" preflight \
   --config config/examples/synthetic-installation.json \
   --product-root "$PWD"
 ```

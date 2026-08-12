@@ -14,7 +14,7 @@ test("repository governance records the accepted licensing boundary", () => {
   const license = read("LICENSE");
   assert.equal(license.match(/Permission is hereby granted/g)?.length, 1);
   assert.match(license, /^MIT License\n\nCopyright \(c\) 2026 Victor Chu\n/);
-  assert.match(license, /THE SOFTWARE IS PROVIDED “AS IS”/);
+  assert.match(license, /THE SOFTWARE IS PROVIDED "AS IS"/);
 
   const scope = read("LICENSE_SCOPE.md");
   for (const path of [

@@ -5,6 +5,10 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const PRODUCT_ROOT = realpathSync(
+  resolve(fileURLToPath(new URL("..", import.meta.url))),
+);
+
 export const PRODUCT = Object.freeze({
   name: "openab-orchestration",
   version: "0.1.0",
@@ -208,6 +212,27 @@ function validatePrivatePath(path, field, productRoot) {
   return canonicalPath;
 }
 
+function requireProductRoot(productRoot) {
+  let canonicalProductRoot;
+  try {
+    canonicalProductRoot = realpathSync(productRoot);
+  } catch (error) {
+    throw new PreflightError(
+      "PRODUCT_ROOT_MISMATCH",
+      `Product root must resolve to this Product Repository: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (canonicalProductRoot !== PRODUCT_ROOT) {
+    throw new PreflightError(
+      "PRODUCT_ROOT_MISMATCH",
+      "Product root must identify the Product Repository containing this artifact",
+    );
+  }
+  return canonicalProductRoot;
+}
+
 function requireEnabledProcesses(configuration) {
   const processKeys = [
     "runtimeCore",
@@ -259,22 +284,57 @@ function requirePlaceholder(value, field) {
   }
 }
 
+function requireInstallationShape(
+  configuration,
+  authorityErrorCode = "CONFIGURATION_CONTRACT_VIOLATION",
+) {
+  requireString(configuration.metadata?.revision, "metadata.revision");
+  requireEnabledProcesses(configuration);
+  requireOnlyKeys(
+    configuration.storage,
+    ["primaryRoot", "recoveryRoot"],
+    "storage",
+  );
+  requireOnlyKeys(configuration.workspace, ["root"], "workspace");
+  requireOnlyKeys(
+    configuration.authority,
+    ["operatorIdentity", "agentRoleIdentities", "githubTarget", "discordOperator"],
+    "authority",
+    authorityErrorCode,
+  );
+  requireOnlyKeys(
+    configuration.authority?.agentRoleIdentities,
+    ["orchestrator", "coding", "reviewerA", "reviewerB"],
+    "authority.agentRoleIdentities",
+    authorityErrorCode,
+  );
+  if (configuration.policy.reviewerDiversity !== "distinct-serving-providers") {
+    throw new Error(
+      "policy.reviewerDiversity must be distinct-serving-providers",
+    );
+  }
+  requireOnlyKeys(
+    configuration.workers,
+    Object.values(WORKER_CONFIG_KEYS),
+    "workers",
+  );
+  return Object.entries(WORKER_CONFIG_KEYS).map(([mode, key]) => {
+    requireOnlyKeys(
+      configuration.workers?.[key],
+      ["secretReferences"],
+      `workers.${key}`,
+    );
+    return {
+      mode,
+      key,
+      references: requireWorkerPurposes(configuration, mode, key),
+    };
+  });
+}
+
 function requireCompleteSyntheticInstallation(configuration) {
   try {
-    requireString(configuration.metadata?.revision, "metadata.revision");
-    requireEnabledProcesses(configuration);
-    requireOnlyKeys(configuration.storage, ["primaryRoot", "recoveryRoot"], "storage");
-    requireOnlyKeys(configuration.workspace, ["root"], "workspace");
-    requireOnlyKeys(
-      configuration.authority,
-      ["operatorIdentity", "agentRoleIdentities", "githubTarget", "discordOperator"],
-      "authority",
-    );
-    requireOnlyKeys(
-      configuration.authority?.agentRoleIdentities,
-      ["orchestrator", "coding", "reviewerA", "reviewerB"],
-      "authority.agentRoleIdentities",
-    );
+    const workerConfigurations = requireInstallationShape(configuration);
     requirePlaceholder(configuration.storage?.primaryRoot, "storage.primaryRoot");
     requirePlaceholder(
       configuration.storage?.recoveryRoot,
@@ -299,27 +359,8 @@ function requireCompleteSyntheticInstallation(configuration) {
       configuration.authority?.discordOperator,
       "authority.discordOperator",
     );
-    if (configuration.policy?.reviewerDiversity !== "distinct-serving-providers") {
-      throw new Error(
-        "policy.reviewerDiversity must be distinct-serving-providers",
-      );
-    }
-    requireOnlyKeys(
-      configuration.workers,
-      Object.values(WORKER_CONFIG_KEYS),
-      "workers",
-    );
-    for (const [mode, key] of Object.entries(WORKER_CONFIG_KEYS)) {
-      requireOnlyKeys(
-        configuration.workers?.[key],
-        ["secretReferences"],
-        `workers.${key}`,
-      );
-      for (const [index, reference] of requireWorkerPurposes(
-        configuration,
-        mode,
-        key,
-      ).entries()) {
+    for (const { key, references } of workerConfigurations) {
+      for (const [index, reference] of references.entries()) {
         const field = `workers.${key}.secretReferences[${index}]`;
         requireString(reference.purpose, `${field}.purpose`);
         if (
@@ -348,10 +389,10 @@ function requireCompleteSyntheticInstallation(configuration) {
 }
 
 function requireCompletePrivateInstallation(configuration, productRoot) {
-  requireString(configuration.metadata?.revision, "metadata.revision");
-  requireEnabledProcesses(configuration);
-
-  requireOnlyKeys(configuration.storage, ["primaryRoot", "recoveryRoot"], "storage");
+  const workerConfigurations = requireInstallationShape(
+    configuration,
+    "AUTHORITY_CONFIGURATION_INCOMPLETE",
+  );
   requireOnlyKeys(configuration.storage.primaryRoot, ["path"], "storage.primaryRoot");
   requireOnlyKeys(configuration.storage.recoveryRoot, ["path"], "storage.recoveryRoot");
   requireOnlyKeys(configuration.workspace, ["root"], "workspace");
@@ -390,12 +431,6 @@ function requireCompletePrivateInstallation(configuration, productRoot) {
       "storage.primaryRoot.path and storage.recoveryRoot.path must resolve to distinct locations",
     );
   }
-  requireOnlyKeys(
-    configuration.authority,
-    ["operatorIdentity", "agentRoleIdentities", "githubTarget", "discordOperator"],
-    "authority",
-    "AUTHORITY_CONFIGURATION_INCOMPLETE",
-  );
   requireOnlyKeys(
     configuration.authority?.operatorIdentity,
     ["id"],
@@ -445,24 +480,7 @@ function requireCompletePrivateInstallation(configuration, productRoot) {
     configuration.authority?.discordOperator?.id,
     "authority.discordOperator.id",
   );
-  if (configuration.policy?.reviewerDiversity !== "distinct-serving-providers") {
-    throw new Error(
-      "policy.reviewerDiversity must be distinct-serving-providers",
-    );
-  }
-
-  requireOnlyKeys(
-    configuration.workers,
-    Object.values(WORKER_CONFIG_KEYS),
-    "workers",
-  );
-  for (const [mode, key] of Object.entries(WORKER_CONFIG_KEYS)) {
-    requireOnlyKeys(
-      configuration.workers?.[key],
-      ["secretReferences"],
-      `workers.${key}`,
-    );
-    const references = requireWorkerPurposes(configuration, mode, key);
+  for (const { key, references } of workerConfigurations) {
     for (const [index, reference] of references.entries()) {
       const field = `workers.${key}.secretReferences[${index}]`;
       requireOnlyKeys(
@@ -476,15 +494,31 @@ function requireCompletePrivateInstallation(configuration, productRoot) {
         throw new Error(`${field}.provider must be environment or file`);
       }
       requireString(reference.reference, `${field}.reference`);
+      if (
+        reference.provider === "environment" &&
+        !/^[A-Z_][A-Z0-9_]*$/.test(reference.reference)
+      ) {
+        throw new PreflightError(
+          "SECRET_PAYLOAD_FORBIDDEN",
+          `${field}.reference must be an environment-variable name, not Secret Material`,
+        );
+      }
+      if (
+        reference.provider === "file" &&
+        (!isAbsolute(reference.reference) ||
+          pathIsWithin(resolve(reference.reference), PRODUCT_ROOT))
+      ) {
+        throw new PreflightError(
+          "SECRET_PAYLOAD_FORBIDDEN",
+          `${field}.reference must be an absolute private path outside the Product Repository`,
+        );
+      }
       requireString(reference.generation, `${field}.generation`);
     }
   }
 }
 
-function secretReferenceGenerations(configuration) {
-  if (configuration.kind === "SyntheticInstallation") {
-    return {};
-  }
+function privateSecretReferenceGenerations(configuration) {
   return Object.fromEntries(
     Object.entries(WORKER_CONFIG_KEYS)
       .flatMap(([mode, key]) =>
@@ -497,43 +531,108 @@ function secretReferenceGenerations(configuration) {
   );
 }
 
-function effectiveConfiguration(configuration) {
+function syntheticEffectiveConfiguration(configuration) {
   const effective = structuredClone(configuration);
   delete effective.$schema;
-  if (configuration.kind === "Installation") {
-    for (const key of Object.values(WORKER_CONFIG_KEYS)) {
-      effective.workers[key].secretReferences = effective.workers[
-        key
-      ].secretReferences.map(({ purpose, generation }) => ({
-        purpose,
-        generation,
-      }));
-    }
+  return effective;
+}
+
+function privateEffectiveConfiguration(configuration) {
+  const effective = syntheticEffectiveConfiguration(configuration);
+  for (const key of Object.values(WORKER_CONFIG_KEYS)) {
+    effective.workers[key].secretReferences = effective.workers[
+      key
+    ].secretReferences.map(({ purpose, generation }) => ({
+      purpose,
+      generation,
+    }));
   }
   return effective;
 }
 
+function requirePrivateConfigurationLocation(configPath, productRoot) {
+  let canonicalConfigurationPath;
+  try {
+    canonicalConfigurationPath = realpathSync(configPath);
+  } catch (error) {
+    throw new PreflightError(
+      "PRIVATE_CONFIGURATION_UNAVAILABLE",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  if (pathIsWithin(canonicalConfigurationPath, productRoot)) {
+    throw new PreflightError(
+      "PRIVATE_CONFIGURATION_IN_CHECKOUT",
+      "Installation Configuration must remain outside the Product Repository checkout",
+    );
+  }
+}
+
+const INSTALLATION_KINDS = Object.freeze({
+  SyntheticInstallation: Object.freeze({
+    synthetic: true,
+    validate(configuration) {
+      requireCompleteSyntheticInstallation(configuration);
+    },
+    effectiveConfiguration: syntheticEffectiveConfiguration,
+    secretReferenceGenerations() {
+      return {};
+    },
+    workerSecretResolutionPlan() {
+      throw new Error("Synthetic Installations have no private secret references");
+    },
+  }),
+  Installation: Object.freeze({
+    synthetic: false,
+    validate(configuration, { configPath, productRoot }) {
+      requirePrivateConfigurationLocation(configPath, productRoot);
+      try {
+        requireCompletePrivateInstallation(configuration, productRoot);
+      } catch (error) {
+        if (error instanceof PreflightError) {
+          throw error;
+        }
+        throw new PreflightError(
+          "AUTHORITY_CONFIGURATION_INCOMPLETE",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    },
+    effectiveConfiguration: privateEffectiveConfiguration,
+    secretReferenceGenerations: privateSecretReferenceGenerations,
+    workerSecretResolutionPlan(configuration, key) {
+      return structuredClone({
+        configurationRevision: configuration.metadata.revision,
+        secretReferences: configuration.workers[key].secretReferences,
+      });
+    },
+  }),
+});
+
 class InstallationInspection {
   #configuration;
+  #kind;
 
-  constructor(configuration) {
+  constructor(configuration, kind) {
     this.#configuration = structuredClone(configuration);
+    this.#kind = kind;
   }
 
   runtimeCoreReply() {
     const configuration = this.#configuration;
     return {
       ok: true,
-      synthetic: configuration.kind === "SyntheticInstallation",
+      synthetic: this.#kind.synthetic,
       contactedExternalInfrastructure: false,
       product: PRODUCT,
       supportedProcessModes: PROCESS_MODES,
       runtimeCore: {
         configurationRevision: configuration.metadata.revision,
         effectiveConfigurationDigest: configurationDigest(
-          effectiveConfiguration(configuration),
+          this.#kind.effectiveConfiguration(configuration),
         ),
-        secretReferenceGenerations: secretReferenceGenerations(configuration),
+        secretReferenceGenerations:
+          this.#kind.secretReferenceGenerations(configuration),
       },
     };
   }
@@ -546,56 +645,25 @@ class InstallationInspection {
     if (!key) {
       throw new Error(`Unsupported worker mode: ${mode}`);
     }
-    if (this.#configuration.kind === "SyntheticInstallation") {
-      throw new Error("Synthetic Installations have no private secret references");
-    }
-    return structuredClone({
-      configurationRevision: this.#configuration.metadata.revision,
-      secretReferences: this.#configuration.workers[key].secretReferences,
-    });
+    return this.#kind.workerSecretResolutionPlan(this.#configuration, key);
   }
 }
 
 export function inspectInstallation(configPath, productRoot) {
   requireString(productRoot, "product root");
+  const canonicalProductRoot = requireProductRoot(productRoot);
   const configuration = JSON.parse(readFileSync(configPath, "utf8"));
   rejectSecretPayloadFields(configuration);
   requireConfigurationEnvelope(configuration);
-  if (configuration.kind === "SyntheticInstallation") {
-    requireCompleteSyntheticInstallation(configuration);
-  } else if (configuration.kind === "Installation") {
-    let canonicalConfigurationPath;
-    let canonicalProductRoot;
-    try {
-      canonicalConfigurationPath = realpathSync(configPath);
-      canonicalProductRoot = realpathSync(productRoot);
-    } catch (error) {
-      throw new PreflightError(
-        "PRIVATE_CONFIGURATION_UNAVAILABLE",
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-    if (pathIsWithin(canonicalConfigurationPath, canonicalProductRoot)) {
-      throw new PreflightError(
-        "PRIVATE_CONFIGURATION_IN_CHECKOUT",
-        "Installation Configuration must remain outside the Product Repository checkout",
-      );
-    }
-    try {
-      requireCompletePrivateInstallation(configuration, productRoot);
-    } catch (error) {
-      if (error instanceof PreflightError) {
-        throw error;
-      }
-      throw new PreflightError(
-        "AUTHORITY_CONFIGURATION_INCOMPLETE",
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  } else {
+  const kind = INSTALLATION_KINDS[configuration.kind];
+  if (!kind) {
     throw new Error("kind must be SyntheticInstallation or Installation");
   }
-  return new InstallationInspection(configuration);
+  kind.validate(configuration, {
+    configPath,
+    productRoot: canonicalProductRoot,
+  });
+  return new InstallationInspection(configuration, kind);
 }
 
 export function run(args, io = process) {

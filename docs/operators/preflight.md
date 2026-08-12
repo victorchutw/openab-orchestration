@@ -10,12 +10,13 @@ versioned artifact from a clean checkout:
 
 ```bash
 npm run check
-npm run build
+artifact_path="$(npm run build --silent)"
 npm test
 ```
 
-The resulting executable is `dist/openab-orchestration-v0.1.0.mjs`. It exposes
-these planned process modes from the same product artifact:
+The build prints the path to the resulting
+`dist/openab-orchestration-v<version>.mjs` executable in `artifact_path`. It
+exposes these planned process modes from the same product artifact:
 
 - `runtime-core` — Runtime Core
 - `execution-worker` — Execution Worker
@@ -31,7 +32,8 @@ implementations.
 contains descriptions of private shapes, not usable bindings. Validate it with:
 
 ```bash
-dist/openab-orchestration-v0.1.0.mjs preflight \
+artifact_path="$(npm run build --silent)"
+"$artifact_path" preflight \
   --config config/examples/synthetic-installation.json \
   --product-root "$PWD"
 ```
@@ -69,7 +71,8 @@ default is `distinct-serving-providers`.
 Run preflight with the private path:
 
 ```bash
-dist/openab-orchestration-v0.1.0.mjs preflight \
+artifact_path="$(npm run build --silent)"
+"$artifact_path" preflight \
   --config /private/configuration/location/installation.json \
   --product-root "$PWD"
 ```
