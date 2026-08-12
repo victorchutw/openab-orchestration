@@ -59,6 +59,9 @@ test("contribution, conduct, and security terms preserve human accountability", 
   assert.match(implementationLoop, /reconcile an uncertain write/i);
   assert.match(implementationLoop, /DCO\s+certification/i);
   assert.match(implementationLoop, /npm run check:public/i);
+  assert.match(implementationLoop, /current ticket is merged/i);
+  assert.match(implementationLoop, /required CI check has completed successfully/i);
+  assert.match(implementationLoop, /recommend exactly one next ticket/i);
 
   const conduct = read("CODE_OF_CONDUCT.md");
   assert.match(conduct, /Contributor Covenant.*version 2\.1/is);

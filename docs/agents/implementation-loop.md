@@ -132,3 +132,19 @@ exact intended tree, run `npm run check:public`, inspect the complete staged
 tree and reachable history, and complete the human exposure review required by
 `CONTRIBUTING.md`. A passing automated check is evidence, not publication
 approval.
+
+## 6. Recommend the next ticket
+
+After the maintainer confirms that the current ticket is merged and every
+required CI check has completed successfully, refresh the GitHub queue and
+recommend exactly one next ticket. Choose an open `ready-for-agent` leaf ticket
+with no assignee and no open blocker. Refer to it by linked title, explain why
+it is on the current frontier, and name the work it unlocks.
+
+While merge or required CI is pending or failed, report that status without a
+next-ticket recommendation. When no ticket is eligible, say that the queue has
+no frontier and name the blockers instead of recommending blocked work.
+
+Completion criterion: the recommendation reflects tracker state read after the
+successful merge and CI completion, or the absence of an eligible ticket is
+explained.
