@@ -263,6 +263,7 @@
         "generation": {
           "type": "string",
           "minLength": 1,
+          "pattern": "^generation:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
           "description": "Non-secret generation identifier exposed to Runtime Core."
         }
       },

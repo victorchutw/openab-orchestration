@@ -40,6 +40,10 @@ test("the public Configuration Contract is versioned and fail-closed", () => {
     contract.$defs.secretReference.allOf[1].then.properties.reference.pattern,
     "^/",
   );
+  assert.equal(
+    contract.$defs.secretReference.properties.generation.pattern,
+    "^generation:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+  );
   assert.equal(contract.$defs.placeholder.additionalProperties, false);
   assert.match(contract.description, /private Installation/i);
   assert.match(contract.description, /Secret Material/i);
