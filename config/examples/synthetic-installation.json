@@ -1,0 +1,65 @@
+{
+  "$schema": "../configuration-contract.schema.json",
+  "apiVersion": "openab.dev/v1alpha1",
+  "kind": "SyntheticInstallation",
+  "metadata": {
+    "revision": "synthetic-example-v1"
+  },
+  "processes": {
+    "runtimeCore": { "enabled": true },
+    "executionWorker": { "enabled": true },
+    "githubPublisher": { "enabled": true },
+    "discordOperatorInterface": { "enabled": true }
+  },
+  "storage": {
+    "primaryRoot": { "placeholder": "private primary storage root" },
+    "recoveryRoot": { "placeholder": "private recovery storage root" }
+  },
+  "workspace": {
+    "root": { "placeholder": "private Execution Workspace root" }
+  },
+  "authority": {
+    "operatorIdentity": { "placeholder": "private Operator identity" },
+    "agentRoleIdentities": {
+      "orchestrator": { "placeholder": "private Orchestrator Agent identity" },
+      "coding": { "placeholder": "private Coding Agent identity" },
+      "reviewerA": { "placeholder": "private Reviewer Agent A identity" },
+      "reviewerB": { "placeholder": "private Reviewer Agent B identity" }
+    },
+    "githubTarget": { "placeholder": "private Target Repository binding" },
+    "discordOperator": { "placeholder": "private Discord Operator binding" }
+  },
+  "policy": {
+    "reviewerDiversity": "distinct-serving-providers"
+  },
+  "workers": {
+    "executionWorker": {
+      "secretReferences": [
+        {
+          "purpose": "provider-authentication",
+          "placeholder": "private provider secret reference and generation"
+        },
+        {
+          "purpose": "acp-transport-authentication",
+          "placeholder": "private ACP transport secret reference and generation"
+        }
+      ]
+    },
+    "githubPublisher": {
+      "secretReferences": [
+        {
+          "purpose": "github-publication-authentication",
+          "placeholder": "private GitHub secret reference and generation"
+        }
+      ]
+    },
+    "discordOperatorInterface": {
+      "secretReferences": [
+        {
+          "purpose": "discord-bot-authentication",
+          "placeholder": "private Discord secret reference and generation"
+        }
+      ]
+    }
+  }
+}

@@ -1,10 +1,13 @@
 # OpenAB Orchestration
 
-Greenfield, local-first development orchestration for OpenAB agents.
+Greenfield, local-first development orchestration for OpenAB agents. This is an
+independent, unofficial OpenAB integration and is not endorsed by the upstream
+OpenAB project.
 
-This public repository is currently in a Wayfinder planning phase. Its first
-destination is a decision-complete MVP specification for one complete coding
-and review loop:
+The planning destination is complete and greenfield implementation has begun.
+The current `0.1.0` bootstrap provides a buildable product entry point and a
+fail-closed Installation preflight before any Runtime Core or worker starts.
+The complete MVP remains one coding and review loop:
 
 ```text
 Operator
@@ -37,7 +40,8 @@ source control, not the operational source of truth.
 
 ## Status
 
-- Planning only; implementation has not started.
+- Bootstrap implementation only; the Runtime Core and adapters are not yet
+  implemented and no production deployment is supported.
 - One Orchestrator Agent, one Coding Agent, and two decision-isolated Reviewer
   Agents are in the MVP destination.
 - One bounded remediation round is allowed before returning to the Operator.
@@ -46,17 +50,42 @@ source control, not the operational source of truth.
 - Runtime data, credentials, agent sessions, and evidence stay outside this
   public checkout.
 
+## Build and preflight
+
+Node.js 22 or newer is required. The product has no runtime package
+dependencies.
+
+```bash
+npm run check
+npm run build
+npm test
+dist/openab-orchestration-v0.1.0.mjs modes
+dist/openab-orchestration-v0.1.0.mjs preflight \
+  --config config/examples/synthetic-installation.json \
+  --product-root "$PWD"
+```
+
+The synthetic preflight is local-only: it validates public placeholder shapes
+without resolving credentials or contacting a provider, GitHub, Discord, k3s,
+or any other infrastructure. See the [preflight operator
+guide](./docs/operators/preflight.md) before creating private Installation
+Configuration.
+
 ## Repository map
 
 - [Domain language](./CONTEXT.md)
 - [Research library](./docs/research/README.md)
 - [Legacy provenance](./docs/legacy/provenance.md)
 - [Issue tracker operations](./docs/agents/issue-tracker.md)
+- [Configuration Contract](./config/configuration-contract.schema.json)
+- [Synthetic Installation](./config/examples/synthetic-installation.json)
+- [License scope](./LICENSE_SCOPE.md)
+- [Contribution guide](./CONTRIBUTING.md)
+- [Security policy](./SECURITY.md)
 
-The canonical map is
-[Design the greenfield OpenAB coding and review MVP](https://github.com/victorchutw/openab-orchestration/issues/1).
-Open decision tickets are its child issues; research and planning documents do
-not silently become accepted architecture.
+The completed design map is [Design the greenfield OpenAB coding and review
+MVP](https://github.com/victorchutw/openab-orchestration/issues/1).
+Research and planning documents do not silently become accepted architecture.
 
 ## Public boundary
 
@@ -65,5 +94,7 @@ and non-sensitive research. Private deployment bindings, credentials, runtime
 databases, session state, worktrees, and evidence bundles belong outside the
 checkout.
 
-No license has been selected yet. Public visibility does not grant reuse
-rights; licensing is an explicit Wayfinder decision.
+Victor Chu-owned greenfield material is available under the MIT License, with
+explicit migrated and third-party exclusions described in
+[`LICENSE_SCOPE.md`](./LICENSE_SCOPE.md). Public visibility alone does not grant
+rights to excluded material.
