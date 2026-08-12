@@ -29,8 +29,9 @@ python3 prototypes/durable-persistence-recovery/prototype.py
 - **Authoritative SQLite（權威 SQLite）**：唯一能決定 Runtime Core 當前狀態的
   SQLite 資料庫。復原資料只能驗證或重建它，不能自行成為另一個決策來源。
 - **Commit capsule（提交封包）**：不可變的完整提交描述，內含 Commit ID、前一個
-  提交、修訂版、請求與回條、狀態異動、產出物參照及 Effect Intent。封包先寫入
-  復原邊界，之後才把完全相同的內容套用到權威 SQLite。
+  提交、修訂版、authority epoch、schema 版本、configuration digest（設定摘要）、
+  請求與回條、狀態異動、產出物參照及 Effect Intent。封包先寫入復原邊界，之後才
+  把完全相同的內容套用到權威 SQLite。
 - **Recovery boundary（復原邊界）**：主要儲存區遺失後仍可使用的獨立儲存故障域；
   它保存復原世代、提交封包與內容定址產出物。
 - **Content-addressed store（內容定址儲存區）**：以內容的 SHA-256 digest（摘要值）
@@ -75,8 +76,9 @@ python3 prototypes/durable-persistence-recovery/prototype.py
 - 使用一個權威 SQLite 資料庫，開啟 WAL（write-ahead log，預寫式日誌）模式，並設為
   `synchronous=FULL`。
 - 每次狀態轉換都表示成 canonical（格式唯一化）、不可變的 commit capsule，包含
-  Commit ID、前一個提交、修訂版、請求身分與摘要、耐久化回條、domain mutation
-  （領域異動）、產出物參照與 Effect Intent（外部效果意圖）。
+  Commit ID、前一個提交、修訂版、authority epoch、schema 版本、configuration
+  digest、請求身分與摘要、耐久化回條、domain mutation（領域異動）、產出物參照與
+  Effect Intent（外部效果意圖）。
 - `durability` 內部強制每個 Installation 同時只有一個 writer（寫入者），而且最多只能有
   一個「下一修訂版」處於 prepared 狀態。Linux 參考配置使用 advisory writer lock
   （協同式寫入鎖）；啟動時必須先處理唯一的 prepared capsule，才接受下一個候選提交。

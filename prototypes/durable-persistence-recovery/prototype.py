@@ -93,6 +93,7 @@ class CapsuleLayout:
                         ('revision', '0'),
                         ('authority_epoch', '1'),
                         ('schema_version', '1'),
+                        ('configuration_digest', 'sha256:synthetic-configuration-v1'),
                         ('recovery_gate', 'open');
 
                     CREATE TABLE current_state (
@@ -208,6 +209,9 @@ class CapsuleLayout:
                 "commit_id": commit_id,
                 "predecessor": metadata["head"],
                 "revision": revision,
+                "authority_epoch": int(metadata["authority_epoch"]),
+                "schema_version": int(metadata["schema_version"]),
+                "configuration_digest": metadata["configuration_digest"],
                 "request_id": request_id,
                 "request_digest": request_digest,
                 "changes": changes,
@@ -232,11 +236,6 @@ class CapsuleLayout:
         fault: str | None = None,
     ) -> dict[str, Any]:
         self.initialize()
-        with self.connect(self.database) as connection:
-            existing = connection.execute(
-                "SELECT request_digest, receipt_json FROM commits WHERE request_id = ?",
-                (request_id,),
-            ).fetchone()
         payload_digest = digest_bytes(
             canonical(
                 {
@@ -246,10 +245,34 @@ class CapsuleLayout:
                 }
             )
         )
+        with self.connect(self.database) as connection:
+            existing = connection.execute(
+                """
+                SELECT commit_id, request_digest, receipt_json, capsule_digest
+                FROM commits WHERE request_id = ?
+                """,
+                (request_id,),
+            ).fetchone()
         if existing:
             if existing["request_digest"] != payload_digest:
                 raise RuntimeError("request ID reused with different content")
+            self.verified_capsule_for_commit(
+                existing["commit_id"], existing["capsule_digest"]
+            )
             return json.loads(existing["receipt_json"])
+
+        prepared = self.prepared_capsules()
+        if prepared:
+            if len(prepared) != 1:
+                raise RuntimeError("multiple prepared capsules require recovery")
+            capsule = prepared[0]
+            if (
+                capsule["request_id"] != request_id
+                or capsule["request_digest"] != payload_digest
+            ):
+                raise RuntimeError("prepared capsule must be recovered first")
+            self.apply_capsule(self.database, capsule)
+            return capsule["receipt"]
 
         primary_digest = self.promote(self.primary, artifact)
         crash_at(fault, "after_primary_artifact")
@@ -298,6 +321,15 @@ class CapsuleLayout:
                     raise RuntimeError("prepared capsule predecessor is not active head")
                 if int(metadata["revision"]) + 1 != capsule["revision"]:
                     raise RuntimeError("prepared capsule revision is not next")
+                if int(metadata["authority_epoch"]) != capsule["authority_epoch"]:
+                    raise RuntimeError("prepared capsule authority epoch is stale")
+                if int(metadata["schema_version"]) != capsule["schema_version"]:
+                    raise RuntimeError("prepared capsule schema version is stale")
+                if (
+                    metadata["configuration_digest"]
+                    != capsule["configuration_digest"]
+                ):
+                    raise RuntimeError("prepared capsule configuration is stale")
 
                 connection.execute(
                     """
@@ -360,8 +392,48 @@ class CapsuleLayout:
             result.append(capsule)
         return result
 
+    def verified_capsule_for_commit(
+        self, commit_id: str, capsule_digest: str
+    ) -> dict[str, Any]:
+        for capsule in self.capsules():
+            if capsule["commit_id"] != commit_id:
+                continue
+            if capsule["capsule_digest"] != capsule_digest:
+                raise RuntimeError("primary commit and recovery capsule disagree")
+            return capsule
+        raise RuntimeError("primary commit has no recovery capsule")
+
+    def prepared_capsules(self) -> list[dict[str, Any]]:
+        with self.connect(self.database) as connection:
+            committed = {
+                row[0] for row in connection.execute("SELECT commit_id FROM commits")
+            }
+        return [
+            capsule
+            for capsule in self.capsules()
+            if capsule["commit_id"] not in committed
+        ]
+
+    def verify_primary_head(self) -> None:
+        with self.connect(self.database) as connection:
+            row = connection.execute(
+                """
+                SELECT commit_id, capsule_digest
+                FROM commits ORDER BY revision DESC LIMIT 1
+                """
+            ).fetchone()
+            metadata = self.meta(connection)
+        if row is None:
+            if metadata["head"] != "GENESIS":
+                raise RuntimeError("non-genesis head has no commit")
+            return
+        if metadata["head"] != row["commit_id"]:
+            raise RuntimeError("primary head disagrees with latest commit")
+        self.verified_capsule_for_commit(row["commit_id"], row["capsule_digest"])
+
     def recover_restart(self) -> dict[str, Any]:
         self.initialize()
+        self.verify_primary_head()
         completed = []
         prepared = []
         for capsule in self.capsules():
@@ -433,6 +505,7 @@ class CapsuleLayout:
             "revision": int(metadata["revision"]),
             "authority_epoch": int(metadata["authority_epoch"]),
             "schema_version": int(metadata["schema_version"]),
+            "configuration_digest": metadata["configuration_digest"],
             "artifacts": artifacts,
         }
         atomic_write(generation / "manifest.json", canonical(manifest))
@@ -451,6 +524,29 @@ class CapsuleLayout:
             with self.connect(database_path) as connection:
                 if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     continue
+                metadata = self.meta(connection)
+            manifest_metadata = {
+                "head": manifest["head"],
+                "revision": str(manifest["revision"]),
+                "authority_epoch": str(manifest["authority_epoch"]),
+                "schema_version": str(manifest["schema_version"]),
+                "configuration_digest": manifest["configuration_digest"],
+            }
+            if any(
+                metadata[key] != value
+                for key, value in manifest_metadata.items()
+            ):
+                continue
+            artifacts_valid = all(
+                self.object_path(self.recovery, digest).exists()
+                and digest_bytes(
+                    self.object_path(self.recovery, digest).read_bytes()
+                )
+                == digest
+                for digest in manifest["artifacts"]
+            )
+            if not artifacts_valid:
+                continue
             result.append((generation, manifest))
         return result
 
@@ -493,7 +589,11 @@ class CapsuleLayout:
         self.create_generation(f"restore-e{epoch}", candidate)
         os.replace(candidate, self.database)
         fsync_directory(self.primary)
-        return self.inspect()
+        return {
+            **self.inspect(),
+            "source_generation": generation.name,
+            "verified_generations": len(self.verified_generations()),
+        }
 
     def migrate_v2(self, fault: str | None = None) -> dict[str, Any]:
         # The gate must be durable in the active schema before the candidate is
@@ -723,14 +823,54 @@ def exercise_commit_boundaries(root: Path) -> list[dict[str, Any]]:
     return observations
 
 
+def exercise_prepared_fence(root: Path) -> dict[str, Any]:
+    layout = CapsuleLayout(root)
+    layout.initialize()
+    exit_code = run_hard_exit(
+        crash_commit_worker, str(root), "after_recovery_capsule"
+    )
+    competing_request_blocked = False
+    try:
+        layout.commit(
+            "request-2",
+            {"run": "Coding"},
+            b"different-artifact",
+            [],
+        )
+    except RuntimeError as error:
+        competing_request_blocked = "recovered first" in str(error)
+    receipt = layout.commit(
+        "request-1",
+        {"run": "Reviewing"},
+        b"review-target-1",
+        ["effect-notify-1"],
+    )
+    state = layout.inspect()
+    return {
+        "hard_exit": exit_code,
+        "competing_request_blocked": competing_request_blocked,
+        "same_request_completed": receipt["request_id"] == "request-1",
+        "commits": state["commits"],
+        "effects": state["effects"],
+    }
+
+
 def exercise_primary_loss(root: Path) -> dict[str, Any]:
     layout = CapsuleLayout(root)
+    layout.commit(
+        "request-checkpoint",
+        {"run": "Reviewing"},
+        b"review-target",
+        ["effect-notify"],
+    )
+    layout.create_generation("g000001-checkpoint", layout.database)
     layout.commit(
         "request-restore",
         {"run": "Final Decision"},
         b"evidence-bundle",
         ["effect-publish"],
     )
+    generations_before_loss = len(layout.verified_generations())
     shutil.rmtree(layout.primary)
     restored = layout.restore_primary()
     return {
@@ -739,6 +879,9 @@ def exercise_primary_loss(root: Path) -> dict[str, Any]:
         "effects_requiring_reconciliation": restored["effects"],
         "authority_epoch": restored["authority_epoch"],
         "recovery_gate": restored["recovery_gate"],
+        "generations_before_loss": generations_before_loss,
+        "source_generation": restored["source_generation"],
+        "verified_generations_after_restore": restored["verified_generations"],
     }
 
 
@@ -772,6 +915,8 @@ def exercise_migration(root: Path) -> dict[str, Any]:
 def exercise_orphan_cleanup(root: Path) -> dict[str, Any]:
     layout = CapsuleLayout(root)
     layout.commit("request-keep", {"run": "Coding"}, b"accepted", [])
+    with layout.connect(layout.database) as connection:
+        metadata = layout.meta(connection)
     prepared_digest = layout.promote(layout.primary, b"prepared")
     layout.promote(layout.recovery, b"prepared")
     prepared = layout.seal_capsule(
@@ -780,6 +925,9 @@ def exercise_orphan_cleanup(root: Path) -> dict[str, Any]:
             "commit_id": "c-prepared-blocked",
             "predecessor": "not-the-active-head",
             "revision": 99,
+            "authority_epoch": int(metadata["authority_epoch"]),
+            "schema_version": int(metadata["schema_version"]),
+            "configuration_digest": metadata["configuration_digest"],
             "request_id": "request-prepared",
             "request_digest": digest_bytes(b"prepared"),
             "changes": {},
@@ -814,6 +962,7 @@ def pass_label(value: bool) -> str:
 def print_report_zh_tw(report: dict[str, Any]) -> None:
     alternatives = report["alternative_failures"]
     writers = report["single_writer_coordination"]
+    prepared_fence = report["prepared_capsule_fence"]
     primary_loss = report["primary_storage_loss"]
     migration = report["migration_interruption"]
     cleanup = report["orphan_cleanup"]
@@ -849,6 +998,17 @@ def print_report_zh_tw(report: dict[str, Any]) -> None:
         f"修訂版依序為 {writers['revisions']}，沒有重複修訂版："
         f"{pass_label(writers['unique_capsule_revisions'] == writers['commits'])}。"
     )
+    prepared_fence_passed = (
+        prepared_fence["competing_request_blocked"]
+        and prepared_fence["same_request_completed"]
+        and prepared_fence["commits"] == 1
+        and prepared_fence["effects"] == 1
+    )
+    print(
+        "- 復原端已有 prepared capsule 時，不同請求會遭阻擋；"
+        "相同請求可完成原 Commit ID，且最後維持 1 筆提交／1 個 Effect Intent："
+        f"{pass_label(prepared_fence_passed)}。"
+    )
     print()
     print("3. 提交邊界強制崩潰")
     print("- 同一 request ID 重送代表：呼叫端不產生新請求，只查詢或重送原請求。")
@@ -867,9 +1027,14 @@ def print_report_zh_tw(report: dict[str, Any]) -> None:
     print()
     print("4. 主要儲存區遺失與復原")
     print(
+        f"- 遺失前保留 {primary_loss['generations_before_loss']} 個已驗證復原世代；"
+        f"以 {primary_loss['source_generation']} 加上 capsule tail 重建。"
+    )
+    print(
         f"- 復原後有 {primary_loss['commits']} 筆提交，權威世代為 "
         f"{primary_loss['authority_epoch']}，復原閘門為「生效中」，仍有 "
-        f"{primary_loss['effects_requiring_reconciliation']} 個外部效果必須調和查證。"
+        f"{primary_loss['effects_requiring_reconciliation']} 個外部效果必須調和查證；"
+        f"復原完成後共有 {primary_loss['verified_generations_after_restore']} 個已驗證世代。"
     )
     print()
     print("5. 結構遷移中斷")
@@ -906,6 +1071,9 @@ def main() -> None:
                 root / "single-writer"
             ),
             "commit_boundary_crashes": exercise_commit_boundaries(root / "commits"),
+            "prepared_capsule_fence": exercise_prepared_fence(
+                root / "prepared-fence"
+            ),
             "primary_storage_loss": exercise_primary_loss(root / "primary-loss"),
             "migration_interruption": exercise_migration(root / "migration"),
             "orphan_cleanup": exercise_orphan_cleanup(root / "orphan-cleanup"),
