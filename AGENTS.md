@@ -11,6 +11,10 @@ tickets, read `docs/agents/issue-tracker.md`. Refer to issues by linked title in
 human-facing text. Implement only after the map reaches its destination and the
 maintainer authorizes an implementation handoff.
 
+Before implementing an authorized ticket, read
+`docs/agents/implementation-loop.md`. Work on one eligible leaf ticket through
+its bounded implementation, independent review, and human handoff.
+
 ## Domain language
 
 Read `CONTEXT.md` when changing product concepts. Update it only when a term is

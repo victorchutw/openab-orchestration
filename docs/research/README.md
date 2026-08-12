@@ -6,6 +6,7 @@ constraints, but statements about the legacy repository, its accepted ADRs,
 GitHub authority, deployment identities, or existing architecture are
 historical context only.
 
+- [Loop engineering for agentic software development](./loop-engineering.md)
 - [OpenAB seams for the first Operator journey](./openab-operator-journey-seams.md)
 - [Runtime SSOT alternatives](./runtime-ssot-alternatives.md) and its
   [interactive zh-TW report](./runtime-ssot-alternatives.html)

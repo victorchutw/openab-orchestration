@@ -41,9 +41,24 @@ test("contribution, conduct, and security terms preserve human accountability", 
   assert.match(contributing, /no Contributor License Agreement/i);
   assert.match(contributing, /material agent or AI generation/i);
   assert.match(contributing, /responsible natural person/i);
+  assert.match(contributing, /bounded implementation\s+loop/i);
+  assert.match(contributing, /independent review/i);
   assert.match(contributing, /staged tree/i);
   assert.match(contributing, /reachable history/i);
   assert.match(contributing, /human exposure review/i);
+
+  const agentInstructions = read("AGENTS.md");
+  assert.match(agentInstructions, /docs\/agents\/implementation-loop\.md/);
+
+  const implementationLoop = read("docs/agents/implementation-loop.md");
+  assert.match(implementationLoop, /maintainer-triggered/i);
+  assert.match(implementationLoop, /assignee is\s+the current implementer/i);
+  assert.match(implementationLoop, /one independent reviewer/i);
+  assert.match(implementationLoop, /at most one in-scope review-fix pass/i);
+  assert.match(implementationLoop, /evidence is durably linked from the ticket/i);
+  assert.match(implementationLoop, /reconcile an uncertain write/i);
+  assert.match(implementationLoop, /DCO\s+certification/i);
+  assert.match(implementationLoop, /npm run check:public/i);
 
   const conduct = read("CODE_OF_CONDUCT.md");
   assert.match(conduct, /Contributor Covenant.*version 2\.1/is);

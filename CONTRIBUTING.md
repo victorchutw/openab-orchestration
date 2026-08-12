@@ -32,6 +32,12 @@ The pull request must disclose material agent or AI generation, name the areas
 affected, and summarize the human verification performed. An unattended bot
 cannot make this certification or replace human accountability.
 
+Authorized implementation work follows the [bounded implementation
+loop](./docs/agents/implementation-loop.md): one eligible ticket, observable
+acceptance evidence, an independent review of the exact candidate, at most one
+review-fix pass, and a human handoff. Recurring discovery remains read-only
+until a maintainer authorizes the next bounded unit of work.
+
 ## Verification
 
 Run the same clean-checkout entry points used by maintainers:
