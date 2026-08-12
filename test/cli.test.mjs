@@ -108,13 +108,13 @@ function privateInstallation(root) {
             purpose: "provider-authentication",
             provider: "environment",
             reference: "OPENAB_TEST_PROVIDER_SECRET",
-            generation: "test-provider-generation-1",
+            generation: "generation:test-provider-1",
           },
           {
             purpose: "acp-transport-authentication",
             provider: "environment",
             reference: "OPENAB_TEST_ACP_SECRET",
-            generation: "test-acp-generation-1",
+            generation: "generation:test-acp-1",
           },
         ],
       },
@@ -124,7 +124,7 @@ function privateInstallation(root) {
             purpose: "github-publication-authentication",
             provider: "environment",
             reference: "OPENAB_TEST_GITHUB_SECRET",
-            generation: "test-github-generation-1",
+            generation: "generation:test-github-1",
           },
         ],
       },
@@ -134,7 +134,7 @@ function privateInstallation(root) {
             purpose: "discord-bot-authentication",
             provider: "environment",
             reference: "OPENAB_TEST_DISCORD_SECRET",
-            generation: "test-discord-generation-1",
+            generation: "generation:test-discord-1",
           },
         ],
       },
@@ -142,15 +142,33 @@ function privateInstallation(root) {
   };
 }
 
-test("preflight gives Runtime Core only a digest and secret generations", () => {
+function withPrivateInstallation(testBody, directories = [
+  "primary",
+  "recovery",
+  "workspaces",
+]) {
   const root = mkdtempSync(join(tmpdir(), "openab-preflight-"));
   try {
-    for (const name of ["primary", "recovery", "workspaces"]) {
+    for (const name of directories) {
       mkdirSync(join(root, name));
     }
-    const configPath = join(root, "installation.json");
-    writeFileSync(configPath, JSON.stringify(privateInstallation(root)));
+    const configuration = privateInstallation(root);
+    const writeConfiguration = (
+      value = configuration,
+      path = join(root, "installation.json"),
+    ) => {
+      writeFileSync(path, JSON.stringify(value));
+      return path;
+    };
+    return testBody({ root, configuration, writeConfiguration });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
+test("preflight gives Runtime Core only a digest and secret generations", () => {
+  withPrivateInstallation(({ root, writeConfiguration }) => {
+    const configPath = writeConfiguration();
     const result = invoke([
       "preflight",
       "--config",
@@ -163,11 +181,11 @@ test("preflight gives Runtime Core only a digest and secret generations", () => 
     assert.equal(reply.synthetic, false);
     assert.deepEqual(reply.runtimeCore.secretReferenceGenerations, {
       "discord-operator-interface/discord-bot-authentication":
-        "test-discord-generation-1",
-      "execution-worker/acp-transport-authentication": "test-acp-generation-1",
-      "execution-worker/provider-authentication": "test-provider-generation-1",
+        "generation:test-discord-1",
+      "execution-worker/acp-transport-authentication": "generation:test-acp-1",
+      "execution-worker/provider-authentication": "generation:test-provider-1",
       "github-publisher/github-publication-authentication":
-        "test-github-generation-1",
+        "generation:test-github-1",
     });
     assert.doesNotMatch(result.stdout, /OPENAB_TEST_/);
     assert.doesNotMatch(result.stdout, /private-test-(operator|reviewer|target)/);
@@ -183,7 +201,7 @@ test("preflight gives Runtime Core only a digest and secret generations", () => 
             purpose: "github-publication-authentication",
             provider: "environment",
             reference: "OPENAB_TEST_GITHUB_SECRET",
-            generation: "test-github-generation-1",
+            generation: "generation:test-github-1",
           },
         ],
       },
@@ -192,22 +210,13 @@ test("preflight gives Runtime Core only a digest and secret generations", () => 
       () => installation.workerSecretResolutionPlan("runtime-core"),
       /does not resolve Secret Material/,
     );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  });
 });
 
 test("preflight rejects private storage or workspaces inside the Product Repository", () => {
-  const root = mkdtempSync(join(tmpdir(), "openab-preflight-"));
-  try {
-    for (const name of ["primary", "recovery"]) {
-      mkdirSync(join(root, name));
-    }
-    const configuration = privateInstallation(root);
+  withPrivateInstallation(({ configuration, writeConfiguration }) => {
     configuration.workspace.root.path = repositoryRoot;
-    const configPath = join(root, "installation.json");
-    writeFileSync(configPath, JSON.stringify(configuration));
-
+    const configPath = writeConfiguration();
     const result = invoke([
       "preflight",
       "--config",
@@ -217,20 +226,13 @@ test("preflight rejects private storage or workspaces inside the Product Reposit
     ]);
     assert.equal(result.exitCode, 2);
     assert.equal(JSON.parse(result.stderr).error.code, "PRIVATE_PATH_IN_CHECKOUT");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  }, ["primary", "recovery"]);
 });
 
 test("preflight rejects primary and recovery roots that resolve to one location", () => {
-  const root = mkdtempSync(join(tmpdir(), "openab-preflight-"));
-  try {
-    mkdirSync(join(root, "primary"));
-    mkdirSync(join(root, "workspaces"));
+  withPrivateInstallation(({ root, writeConfiguration }) => {
     symlinkSync(join(root, "primary"), join(root, "recovery"));
-    const configPath = join(root, "installation.json");
-    writeFileSync(configPath, JSON.stringify(privateInstallation(root)));
-
+    const configPath = writeConfiguration();
     const result = invoke([
       "preflight",
       "--config",
@@ -243,23 +245,14 @@ test("preflight rejects primary and recovery roots that resolve to one location"
       JSON.parse(result.stderr).error.code,
       "STORAGE_ROOTS_NOT_DISTINCT",
     );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  }, ["primary", "workspaces"]);
 });
 
 test("preflight rejects Secret Material supplied as configuration", () => {
-  const root = mkdtempSync(join(tmpdir(), "openab-preflight-"));
-  try {
-    for (const name of ["primary", "recovery", "workspaces"]) {
-      mkdirSync(join(root, name));
-    }
-    const configuration = privateInstallation(root);
+  withPrivateInstallation(({ configuration, writeConfiguration }) => {
     configuration.workers.executionWorker.secretReferences[0].value =
       "synthetic-inline-payload";
-    const configPath = join(root, "installation.json");
-    writeFileSync(configPath, JSON.stringify(configuration));
-
+    const configPath = writeConfiguration();
     const result = invoke([
       "preflight",
       "--config",
@@ -269,23 +262,14 @@ test("preflight rejects Secret Material supplied as configuration", () => {
     ]);
     assert.equal(result.exitCode, 2);
     assert.equal(JSON.parse(result.stderr).error.code, "SECRET_PAYLOAD_FORBIDDEN");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  });
 });
 
 test("preflight accepts only provider-specific secret reference shapes", () => {
-  const root = mkdtempSync(join(tmpdir(), "openab-preflight-"));
-  try {
-    for (const name of ["primary", "recovery", "workspaces"]) {
-      mkdirSync(join(root, name));
-    }
-    const configuration = privateInstallation(root);
+  withPrivateInstallation(({ configuration, writeConfiguration }) => {
     configuration.workers.executionWorker.secretReferences[0].reference =
       "payload-that-is-not-an-environment-variable-name";
-    const configPath = join(root, "installation.json");
-    writeFileSync(configPath, JSON.stringify(configuration));
-
+    const configPath = writeConfiguration();
     const result = invoke([
       "preflight",
       "--config",
@@ -295,22 +279,53 @@ test("preflight accepts only provider-specific secret reference shapes", () => {
     ]);
     assert.equal(result.exitCode, 2);
     assert.equal(JSON.parse(result.stderr).error.code, "SECRET_PAYLOAD_FORBIDDEN");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  });
+});
+
+test("preflight accepts only explicit non-secret generation identifiers", () => {
+  withPrivateInstallation(({ configuration, writeConfiguration }) => {
+    configuration.workers.githubPublisher.secretReferences[0].generation =
+      `ghp_${"0123456789abcdefghijklmnopqrstuvwxyz"}`;
+    const configPath = writeConfiguration();
+    const result = invoke([
+      "preflight",
+      "--config",
+      configPath,
+      "--product-root",
+      repositoryRoot,
+    ]);
+    assert.equal(result.exitCode, 2);
+    assert.equal(JSON.parse(result.stderr).error.code, "SECRET_PAYLOAD_FORBIDDEN");
+  });
+});
+
+test("file secret references must resolve outside the Product Repository", () => {
+  withPrivateInstallation(({ root, configuration, writeConfiguration }) => {
+    const referencePath = join(root, "secret-reference");
+    symlinkSync(resolve(repositoryRoot, "README.md"), referencePath);
+    configuration.workers.githubPublisher.secretReferences[0] = {
+      purpose: "github-publication-authentication",
+      provider: "file",
+      reference: referencePath,
+      generation: "generation:test-github-1",
+    };
+    const configPath = writeConfiguration();
+    const result = invoke([
+      "preflight",
+      "--config",
+      configPath,
+      "--product-root",
+      repositoryRoot,
+    ]);
+    assert.equal(result.exitCode, 2);
+    assert.equal(JSON.parse(result.stderr).error.code, "SECRET_REFERENCE_NOT_PRIVATE");
+  });
 });
 
 test("preflight rejects incomplete authority-sensitive configuration", () => {
-  const root = mkdtempSync(join(tmpdir(), "openab-preflight-"));
-  try {
-    for (const name of ["primary", "recovery", "workspaces"]) {
-      mkdirSync(join(root, name));
-    }
-    const configuration = privateInstallation(root);
+  withPrivateInstallation(({ configuration, writeConfiguration }) => {
     delete configuration.authority.agentRoleIdentities.reviewerB;
-    const configPath = join(root, "installation.json");
-    writeFileSync(configPath, JSON.stringify(configuration));
-
+    const configPath = writeConfiguration();
     const result = invoke([
       "preflight",
       "--config",
@@ -323,9 +338,7 @@ test("preflight rejects incomplete authority-sensitive configuration", () => {
       JSON.parse(result.stderr).error.code,
       "AUTHORITY_CONFIGURATION_INCOMPLETE",
     );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  });
 });
 
 test("synthetic preflight rejects private binding values", () => {

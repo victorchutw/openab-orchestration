@@ -505,15 +505,46 @@ function requireCompletePrivateInstallation(configuration, productRoot) {
       }
       if (
         reference.provider === "file" &&
-        (!isAbsolute(reference.reference) ||
-          pathIsWithin(resolve(reference.reference), PRODUCT_ROOT))
+        !isAbsolute(reference.reference)
+      ) {
+        throw new PreflightError(
+          "SECRET_REFERENCE_NOT_PRIVATE",
+          `${field}.reference must be an absolute private path`,
+        );
+      }
+      if (reference.provider === "file") {
+        let canonicalReference;
+        try {
+          canonicalReference = realpathSync(reference.reference);
+        } catch (error) {
+          throw new PreflightError(
+            "SECRET_REFERENCE_NOT_PRIVATE",
+            `${field}.reference must resolve to an existing private file: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+        if (
+          pathIsWithin(canonicalReference, PRODUCT_ROOT) ||
+          !statSync(canonicalReference).isFile()
+        ) {
+          throw new PreflightError(
+            "SECRET_REFERENCE_NOT_PRIVATE",
+            `${field}.reference must resolve to a private file outside the Product Repository`,
+          );
+        }
+      }
+      requireString(reference.generation, `${field}.generation`);
+      if (
+        !/^generation:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(
+          reference.generation,
+        )
       ) {
         throw new PreflightError(
           "SECRET_PAYLOAD_FORBIDDEN",
-          `${field}.reference must be an absolute private path outside the Product Repository`,
+          `${field}.generation must be an explicit non-secret generation identifier`,
         );
       }
-      requireString(reference.generation, `${field}.generation`);
     }
   }
 }

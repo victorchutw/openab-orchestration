@@ -95,9 +95,11 @@ configuration revision, a SHA-256 digest of the non-secret effective
 configuration, and secret-reference generations. Preflight output never emits
 paths, identities, endpoints, target bindings, or secret-reference values.
 
-Environment and file secret providers name where a worker will resolve Secret
-Material at startup; preflight does not read either provider. Store actual
-payloads outside configuration, Git, runtime records, and evidence.
+Environment providers use uppercase variable names. File providers use existing
+absolute files that resolve outside the Product Repository; preflight inspects
+only path metadata and never reads the Secret Material. Every reference uses an
+explicit non-secret `generation:<id>` identifier. Store actual payloads outside
+configuration, Git, runtime records, and evidence.
 
 ## Public push gate
 
