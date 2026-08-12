@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenAB 耐久化持久儲存與復原原型</title>
+  <style>
+    :root {
+      --ink: #17211b;
+      --muted: #59675f;
+      --paper: #f6f4ec;
+      --panel: #fffdf7;
+      --line: #d7d5cb;
+      --accent: #176b51;
+      --accent-soft: #dceee7;
+      --warning: #8a4b10;
+      --danger: #9f2d2d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { width: min(1180px, calc(100% - 32px)); margin: 44px auto 80px; }
+    h1, h2, h3 { line-height: 1.18; letter-spacing: -0.02em; }
+    h1 { max-width: 850px; margin: 0 0 12px; font-size: clamp(2rem, 5vw, 4rem); }
+    h2 { margin-top: 48px; font-size: 1.65rem; }
+    p { max-width: 850px; }
+    .eyebrow { color: var(--accent); font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+    .notice { padding: 14px 18px; border-left: 4px solid var(--warning); background: #fff4de; }
+    .question { font-size: 1.15rem; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .glossary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 24px; }
+    .glossary dt { color: var(--ink); font-weight: 750; }
+    .glossary dd { color: var(--muted); font-weight: 400; }
+    .card, .state-card, .walkthrough {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      padding: 18px;
+    }
+    .card h3, .state-card h3 { margin: 0 0 8px; }
+    .card p { margin-bottom: 0; color: var(--muted); }
+    .recommended { border: 2px solid var(--accent); }
+    .tag { display: inline-block; margin-bottom: 10px; border-radius: 99px; padding: 3px 9px; background: var(--accent-soft); color: var(--accent); font-size: .82rem; font-weight: 700; }
+    .state-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    dl { margin: 0; }
+    dt { color: var(--muted); font-size: .82rem; }
+    dd { margin: 0 0 9px; font-weight: 680; overflow-wrap: anywhere; }
+    .change { margin-top: 14px; border-radius: 10px; padding: 12px 15px; background: var(--accent-soft); }
+    .change.rejected { background: #fbe1dd; color: var(--danger); }
+    button {
+      border: 1px solid #a8afa9;
+      border-radius: 8px;
+      padding: 9px 12px;
+      color: var(--ink);
+      background: #fff;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    button.primary { border-color: var(--accent); background: var(--accent); color: white; }
+    button:disabled { cursor: default; opacity: .45; }
+    .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+    .tabs { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 8px; }
+    .tabs button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+    .walkthrough { margin-top: 10px; }
+    .walkthrough h3 { margin: 0; }
+    .walkthrough .steps { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+    .walkthrough .steps button.current { border-color: var(--accent); background: var(--accent); color: #fff; }
+    table { width: 100%; border-collapse: collapse; background: var(--panel); }
+    th, td { border-bottom: 1px solid var(--line); padding: 10px 12px; text-align: left; }
+    th { color: var(--muted); font-size: .84rem; }
+    .log { max-height: 240px; overflow: auto; margin: 0; padding-left: 24px; color: var(--muted); }
+    code { background: #eae8df; border-radius: 4px; padding: 1px 4px; }
+    @media (max-width: 850px) {
+      .grid, .state-grid, .glossary { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 560px) {
+      .grid, .state-grid, .glossary { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">可拋棄的邏輯原型</div>
+  <h1>單一 SQLite 的權威狀態，能否安全跨過每個確認邊界？</h1>
+  <p class="question">這個原型要驗證：先寫入復原邊界的不可變 commit capsule（提交封包）、雙邊內容提升，以及「複製後啟用」的復原世代，能否在處理程序崩潰、主要儲存區遺失、restore（復原）及 migration（結構遷移）中斷後，仍只留下唯一的權威狀態轉換。</p>
+  <p class="notice"><strong>原型假設：</strong>這個頁面只模擬決策狀態，本身不會保存資料。搭配的 <code>prototype.py</code> 會真的操作暫存 SQLite 與檔案系統，執行 <code>fsync</code>、強制結束處理程序、移除主要儲存區及垃圾收集實驗；下方表格呈現其觀察結果。</p>
+
+  <h2>先認識幾個術語</h2>
+  <dl class="glossary card">
+    <div><dt>Authoritative SQLite（權威 SQLite）</dt><dd>唯一能決定 Runtime Core 當前狀態的資料庫；復原副本不能自行推進狀態。</dd></div>
+    <div><dt>Commit capsule（提交封包）</dt><dd>一份不可變的完整提交描述，包含 Commit ID、前一筆提交、狀態異動、回條、產出物及 Effect Intent。</dd></div>
+    <div><dt>Recovery boundary（復原邊界）</dt><dd>主要儲存區遺失後仍可使用的獨立儲存故障域。</dd></div>
+    <div><dt>Authority epoch（權威世代）</dt><dd>每次復原或遷移啟用後遞增的版本；舊世代不能再推進狀態。</dd></div>
+    <div><dt>Effect Intent（外部效果意圖）</dt><dd>Runtime Core 對一次外部異動的耐久化授權；重試仍沿用同一個 Effect ID。</dd></div>
+    <div><dt>Prepared（已準備）</dt><dd>提交封包已耐久化，但還沒有成為呼叫端可見的權威狀態。</dd></div>
+  </dl>
+
+  <h2>配置比較</h2>
+  <div class="grid">
+    <article class="card">
+      <h3>提交後再完整鏡像</h3>
+      <p>崩潰時可能留下主要資料庫修訂版 1、復原副本修訂版 0。若加上隱藏的可見狀態，就會重新發明 prepare 協定；而每次確認都要等待一份隨資料量成長的完整備份。</p>
+    </article>
+    <article class="card">
+      <h3>雙可寫 SQLite 的 2PC</h3>
+      <p>崩潰時可能留下復原 schema 2、主要 schema 1。兩邊的資料庫結構、遷移引擎與修復路徑，都會成為同一套分散式提交實作的一部分。</p>
+    </article>
+    <article class="card recommended">
+      <span class="tag">目前的暫定建議</span>
+      <h3>復原優先的提交封包</h3>
+      <p>產出物與一個不可變 Commit ID 會先到達復原邊界，再執行唯一的權威 SQLite transaction（交易）。復原程序可以完成完全相同的 prepared commit，但不能自行產生後續提交。</p>
+    </article>
+  </div>
+
+  <h2>目前狀態</h2>
+  <section id="state" class="state-grid" aria-live="polite"></section>
+  <div id="change" class="change"></div>
+
+  <h2>自由操作</h2>
+  <p>你可以故意打亂協定順序。非法步驟會遭拒絕，而且不會改變權威狀態。</p>
+  <div id="free-play" class="buttons"></div>
+
+  <h2>引導流程</h2>
+  <div id="tabs" class="tabs"></div>
+  <section id="walkthrough" class="walkthrough"></section>
+
+  <h2>強制結束處理程序的實驗結果</h2>
+  <p>搭配程式在每個邊界以結束碼 86 強制終止子處理程序，接著重新開啟暫存儲存區，並用同一個 request ID（請求識別碼）重送。</p>
+  <table>
+    <thead><tr><th>在哪一步後崩潰</th><th>重新啟動後的提交數</th><th>重送相同請求後</th><th>邏輯外部效果數</th></tr></thead>
+    <tbody>
+      <tr><td>主要產出物完成提升</td><td>0</td><td>1 筆提交</td><td>1</td></tr>
+      <tr><td>復原產出物完成提升</td><td>0</td><td>1 筆提交</td><td>1</td></tr>
+      <tr><td>復原提交封包完成</td><td>1，完成同一個 Commit ID</td><td>1 筆提交</td><td>1</td></tr>
+      <tr><td>主要 SQLite 提交完成</td><td>1</td><td>1 筆提交，回傳原始回條</td><td>1</td></tr>
+    </tbody>
+  </table>
+
+  <h2>協定紀錄</h2>
+  <ol id="log" class="log"></ol>
+</main>
+
+<script>
+const DurabilityModel = (() => {
+  const initialState = () => ({
+    process: "Running",
+    primary: { available: true, artifact: false, commit: null, schema: 1 },
+    recovery: { artifact: false, capsule: null, generation: "g000000" },
+    request: { receipt: "None", acknowledged: false },
+    effect: "Not authorized",
+    authorityEpoch: 1,
+    recoveryGate: "Open",
+    installationGate: "Open",
+    migration: { candidate: null, recoveryGeneration: false },
+    orphan: false,
+    last: "Installation（安裝實例）剛建立，目前位於 GENESIS（初始狀態）。",
+    rejected: false,
+    log: ["已建立一個權威 SQLite 資料庫，以及復原世代 g000000。"]
+  });
+
+  function changed(state, patch, message) {
+    return { ...state, ...patch, last: message, rejected: false, log: [...state.log, message] };
+  }
+
+  function rejected(state, message) {
+    return { ...state, last: message, rejected: true, log: [...state.log, `遭拒絕：${message}`] };
+  }
+
+  function reducer(state, action) {
+    switch (action.type) {
+      case "RESET":
+        return initialState();
+      case "PROMOTE_PRIMARY":
+        if (!state.primary.available) return rejected(state, "主要儲存區無法使用。");
+        return changed(state, { primary: { ...state.primary, artifact: true } }, "產出物位元組已完成 fsync，並以內容摘要存入主要儲存區；此時尚不具任何權威。");
+      case "PROMOTE_RECOVERY":
+        if (!state.primary.artifact) return rejected(state, "必須先計算摘要並提升主要儲存區的位元組，才能寫入復原副本。");
+        return changed(state, { recovery: { ...state.recovery, artifact: true } }, "相同摘要的內容已在復原邊界耐久化；但它仍是未被參照的 orphan（孤兒資料）。");
+      case "PERSIST_CAPSULE":
+        if (!state.primary.artifact || !state.recovery.artifact) return rejected(state, "兩個內容儲存區都必須先驗證產出物。");
+        return changed(state, { recovery: { ...state.recovery, capsule: "C1（已準備）" }, request: { ...state.request, receipt: "已耐久化於 C1" } }, "不可變的提交封包 C1 已在復原邊界耐久化。它目前是 prepared（已準備），還不是可見的權威狀態。");
+      case "APPLY_PRIMARY":
+        if (!state.primary.available) return rejected(state, "主要儲存區無法使用。");
+        if (!state.recovery.capsule) return rejected(state, "沒有通過驗證的復原提交封包時，SQLite 不得接受狀態轉換。");
+        return changed(state, { primary: { ...state.primary, commit: "C1／修訂版 1" }, effect: "Pending" }, "一個 SQLite transaction（交易）已套用與 C1 完全相同的 payload（負載內容）。兩邊的耐久化事實現在都已驗證。");
+      case "ACKNOWLEDGE":
+        if (!state.primary.commit || !state.recovery.capsule) return rejected(state, "回覆已接受前，主要提交與復原提交封包必須互相吻合。");
+        return changed(state, { request: { receipt: "已接受 C1／修訂版 1", acknowledged: true } }, "呼叫端收到耐久化的原始回條。之後重送相同請求時，會回傳這張回條。");
+      case "DISPATCH_EFFECT":
+        if (!state.primary.commit || !state.recovery.capsule || state.recoveryGate !== "Open" || state.installationGate !== "Open") return rejected(state, "派送外部效果前，兩邊都必須耐久化，而且 Installation 閘門必須開啟。");
+        return changed(state, { effect: "In flight" }, "固定不變的 Effect ID 現在可以在 authority epoch（權威世代）" + state.authorityEpoch + " 下派送。");
+      case "CRASH": {
+        const effect = state.effect === "In flight" ? "Uncertain" : state.effect;
+        return changed(state, { process: "Stopped", effect, migration: { ...state.migration, candidate: null } }, "處理程序已結束，耐久化檔案仍存在；執行中的外部效果會標記為 Uncertain（狀態不確定），不得只根據崩潰自行猜測結果。");
+      }
+      case "RESTART": {
+        if (!state.primary.available) return rejected(state, "主要儲存區遺失時，必須明確執行 restore（復原），不能只重新啟動處理程序。");
+        let primary = state.primary;
+        let message = "SQLite 完整性與產出物參照皆驗證通過；既有權威 head（最新提交）已重新開啟。";
+        if (state.recovery.capsule && !state.primary.commit) {
+          primary = { ...state.primary, commit: "C1／修訂版 1" };
+          message = "復原程序驗證 C1 的前一筆提交、payload、授權與產出物後，完成了同一個 Commit ID。";
+        }
+        const recoveryGate = state.installationGate === "Open" ? state.recoveryGate : "Upgrade";
+        return changed(state, { process: "Running", primary, recoveryGate, effect: primary.commit && state.effect === "Not authorized" ? "Pending" : state.effect }, message);
+      }
+      case "LOSE_PRIMARY":
+        return changed(state, { process: "Stopped", primary: { ...state.primary, available: false, artifact: false, commit: null }, recoveryGate: "Restore required", effect: state.effect === "Not authorized" ? state.effect : "Uncertain" }, "主要儲存區已遺失。復原必須由 Operator 明確採取行動，系統不會自動回復到舊狀態。");
+      case "RESTORE":
+        if (state.primary.available) return rejected(state, "這條引導流程只允許在主要儲存區遺失後執行復原。");
+        if (!state.recovery.generation || !state.recovery.capsule) return rejected(state, "必須有通過驗證的復原世代與 capsule tail（後續提交封包）。");
+        return changed(state, { process: "Running", primary: { available: true, artifact: state.recovery.artifact, commit: "C1／修訂版 1", schema: 1 }, authorityEpoch: state.authorityEpoch + 1, recoveryGate: "Restore", effect: state.effect === "Not authorized" ? state.effect : "Uncertain" }, "已驗證的候選資料庫加上 capsule tail，已在新的權威世代下原子啟用；可能衝突的進度仍會被閘門阻擋。");
+      case "PROVE_ISOLATED":
+        if (state.effect !== "Uncertain" && state.effect !== "In flight" && state.effect !== "Pending") return rejected(state, "目前沒有尚待 reconciliation（調和查證）的外部效果。");
+        return changed(state, { effect: "Isolated" }, "可歸屬的證據證明：舊外部效果無法在新權威世代下影響已接受狀態。");
+      case "OPEN_GATE":
+        if (["Pending", "In flight", "Uncertain"].includes(state.effect)) return rejected(state, "已知仍在進行或狀態不確定的外部效果，必須先完成調和查證才能開啟閘門。");
+        return changed(state, { recoveryGate: "Open", installationGate: "Open" }, "驗證與調和查證已完成；系統可以恢復一般狀態異動。");
+      case "BEGIN_UPGRADE":
+        if (state.recoveryGate !== "Open" || state.installationGate !== "Open") return rejected(state, "目前已有另一個 Installation 閘門生效。");
+        return changed(state, { installationGate: "Upgrade v2" }, "BeginUpgrade（開始升級）已透過一般耐久化協定提交。即使以 schema v1 重新啟動，也必須維持離線升級狀態。");
+      case "BUILD_CANDIDATE":
+        if (state.installationGate !== "Upgrade v2") return rejected(state, "複製使用中的資料庫前，必須先持久化升級閘門。");
+        return changed(state, { migration: { candidate: "Schema v2 已驗證", recoveryGeneration: false } }, "複製出的候選資料庫已在 transaction 內完成 migration，並通過完整性、foreign key（外鍵）與領域不變量檢查。此時 schema v1 仍是使用中的版本。");
+      case "DURABLE_GENERATION":
+        if (!state.migration.candidate) return rejected(state, "必須先建立通過驗證的結構遷移候選資料庫。");
+        return changed(state, { migration: { ...state.migration, recoveryGeneration: true } }, "Schema v2 的已驗證復原世代，已在啟用前完成耐久化。");
+      case "ACTIVATE_MIGRATION":
+        if (!state.migration.candidate || !state.migration.recoveryGeneration) return rejected(state, "候選資料庫與復原世代都必須驗證通過，才能啟用。");
+        return changed(state, { primary: { ...state.primary, schema: 2 }, authorityEpoch: state.authorityEpoch + 1, recoveryGate: "Upgrade", migration: { candidate: null, recoveryGeneration: true } }, "候選資料庫已在新權威世代下原子取代使用中的資料庫。Adapter（轉接器）重新連線前，升級閘門會持續生效。");
+      case "STAGE_ORPHAN":
+        return changed(state, { orphan: true }, "未被參照的位元組已暫存在兩個儲存區；它們不具任何權威。");
+      case "COLLECT_ORPHANS":
+        if (!state.orphan) return rejected(state, "沒有已超過保留緩衝期、且未被參照的物件可以清理。");
+        return changed(state, { orphan: false }, "保留緩衝期結束後，完整掃描確認資料庫、prepared capsule 與保留世代都未參照它，因此兩份孤兒副本都已移除。");
+      default:
+        return rejected(state, "無法辨識的操作。");
+    }
+  }
+
+  return { initialState, reducer };
+})();
+
+const actions = [
+  ["PROMOTE_PRIMARY", "提升主要產出物"],
+  ["PROMOTE_RECOVERY", "提升復原產出物"],
+  ["PERSIST_CAPSULE", "持久化復原提交封包"],
+  ["APPLY_PRIMARY", "套用 SQLite 提交"],
+  ["ACKNOWLEDGE", "回覆請求已接受"],
+  ["DISPATCH_EFFECT", "派送 Effect Intent"],
+  ["CRASH", "讓處理程序崩潰"],
+  ["RESTART", "重新啟動處理程序"],
+  ["LOSE_PRIMARY", "模擬主要儲存區遺失"],
+  ["RESTORE", "在新權威世代下復原"],
+  ["PROVE_ISOLATED", "證明外部效果已隔離"],
+  ["OPEN_GATE", "開啟 Installation 閘門"],
+  ["BEGIN_UPGRADE", "提交 BeginUpgrade"],
+  ["BUILD_CANDIDATE", "建立 schema v2 候選資料庫"],
+  ["DURABLE_GENERATION", "持久化 v2 復原世代"],
+  ["ACTIVATE_MIGRATION", "啟用 schema v2"],
+  ["STAGE_ORPHAN", "暫存孤兒資料"],
+  ["COLLECT_ORPHANS", "清理符合條件的孤兒資料"],
+  ["RESET", "重設原型"]
+];
+
+const scenarios = [
+  {
+    name: "耐久化提交",
+    description: "觀察權威狀態如何只在復原提交封包與主要 SQLite transaction 都存在後才出現。",
+    steps: ["PROMOTE_PRIMARY", "PROMOTE_RECOVERY", "PERSIST_CAPSULE", "APPLY_PRIMARY", "ACKNOWLEDGE", "DISPATCH_EFFECT"]
+  },
+  {
+    name: "提交封包後崩潰",
+    description: "只有復原端存在提交封包時，它仍是 prepared。重新啟動後，系統可在驗證通過時完成同一個 Commit ID。",
+    steps: ["PROMOTE_PRIMARY", "PROMOTE_RECOVERY", "PERSIST_CAPSULE", "CRASH", "RESTART", "ACKNOWLEDGE"]
+  },
+  {
+    name: "回覆遺失",
+    description: "SQLite 已提交、尚未回覆時處理程序崩潰。重送請求會取得原始耐久化回條，不會產生第二個外部效果。",
+    steps: ["PROMOTE_PRIMARY", "PROMOTE_RECOVERY", "PERSIST_CAPSULE", "APPLY_PRIMARY", "CRASH", "RESTART", "ACKNOWLEDGE"]
+  },
+  {
+    name: "主要儲存區遺失",
+    description: "Restore 會以已驗證世代與 capsule tail 重建資料，遞增 authority epoch，並用閘門阻擋可能衝突的進度。",
+    steps: ["PROMOTE_PRIMARY", "PROMOTE_RECOVERY", "PERSIST_CAPSULE", "APPLY_PRIMARY", "DISPATCH_EFFECT", "LOSE_PRIMARY", "RESTORE", "PROVE_ISOLATED", "OPEN_GATE"]
+  },
+  {
+    name: "結構遷移中斷",
+    description: "建立候選資料庫前，升級閘門會先到達兩個耐久化邊界。即使崩潰，schema v1 仍是使用中版本，但必須維持離線升級狀態。",
+    steps: ["BEGIN_UPGRADE", "BUILD_CANDIDATE", "CRASH", "RESTART", "BUILD_CANDIDATE", "DURABLE_GENERATION", "ACTIVATE_MIGRATION", "OPEN_GATE"]
+  },
+  {
+    name: "孤兒資料清理",
+    description: "只有未被權威狀態、prepared capsule 與保留復原世代參照，而且已超過保留緩衝期的舊位元組可以移除。",
+    steps: ["STAGE_ORPHAN", "COLLECT_ORPHANS"]
+  }
+];
+
+let state = DurabilityModel.initialState();
+let selectedScenario = 0;
+let stepIndex = 0;
+
+function labelFor(type) {
+  return actions.find(([key]) => key === type)?.[1] || type;
+}
+
+function dispatch(type, guided = false) {
+  state = DurabilityModel.reducer(state, { type });
+  if (guided && !state.rejected) stepIndex += 1;
+  render();
+}
+
+function chooseScenario(index) {
+  selectedScenario = index;
+  stepIndex = 0;
+  state = DurabilityModel.initialState();
+  render();
+}
+
+function stateCard(title, entries) {
+  const rows = entries.map(([term, value]) => `<dt>${term}</dt><dd>${value}</dd>`).join("");
+  return `<article class="state-card"><h3>${title}</h3><dl>${rows}</dl></article>`;
+}
+
+function displayStatus(value) {
+  const labels = {
+    "Running": "執行中",
+    "Stopped": "已停止",
+    "None": "無",
+    "Not authorized": "尚未授權",
+    "Pending": "待處理",
+    "In flight": "執行中",
+    "Uncertain": "狀態不確定",
+    "Isolated": "已隔離",
+    "Open": "開啟",
+    "Restore required": "需要復原",
+    "Restore": "復原閘門生效中",
+    "Upgrade": "升級閘門生效中",
+    "Upgrade v2": "v2 升級閘門生效中"
+  };
+  return labels[value] || value;
+}
+
+function render() {
+  document.querySelector("#state").innerHTML = [
+    stateCard("主要權威狀態", [
+      ["可用性", state.primary.available ? "可使用" : "已遺失"],
+      ["SQLite head（最新提交）", state.primary.commit || "GENESIS（初始狀態）"],
+      ["資料庫結構", `v${state.primary.schema}`],
+      ["產出物", state.primary.artifact ? "已提升" : "不存在"]
+    ]),
+    stateCard("復原邊界", [
+      ["復原世代", state.recovery.generation],
+      ["Prepared capsule（已準備提交封包）", state.recovery.capsule || "無"],
+      ["產出物", state.recovery.artifact ? "已提升" : "不存在"],
+      ["結構遷移復原世代", state.migration.recoveryGeneration ? "已驗證" : "無"]
+    ]),
+    stateCard("權威與外部效果", [
+      ["Authority epoch（權威世代）", state.authorityEpoch],
+      ["復原閘門", displayStatus(state.recoveryGate)],
+      ["Installation 閘門", displayStatus(state.installationGate)],
+      ["External Effect（外部效果）", displayStatus(state.effect)]
+    ]),
+    stateCard("呼叫端與處理程序", [
+      ["Runtime Core", displayStatus(state.process)],
+      ["回條", displayStatus(state.request.receipt)],
+      ["是否已回覆接受", state.request.acknowledged ? "是" : "否"],
+      ["結構遷移候選資料庫", state.migration.candidate || "無"]
+    ])
+  ].join("");
+  const change = document.querySelector("#change");
+  change.textContent = state.last;
+  change.className = `change${state.rejected ? " rejected" : ""}`;
+
+  document.querySelector("#free-play").innerHTML = actions.map(([type, label]) => `<button data-action="${type}">${label}</button>`).join("");
+  document.querySelectorAll("#free-play button").forEach(button => button.addEventListener("click", () => dispatch(button.dataset.action)));
+
+  document.querySelector("#tabs").innerHTML = scenarios.map((scenario, index) => `<button class="${index === selectedScenario ? "active" : ""}" data-scenario="${index}">${scenario.name}</button>`).join("");
+  document.querySelectorAll("#tabs button").forEach(button => button.addEventListener("click", () => chooseScenario(Number(button.dataset.scenario))));
+
+  const scenario = scenarios[selectedScenario];
+  const stepButtons = scenario.steps.map((type, index) => `<button class="${index === stepIndex ? "current" : ""}" data-step="${index}" ${index !== stepIndex ? "disabled" : ""}>${index + 1}. ${labelFor(type)}</button>`).join("");
+  document.querySelector("#walkthrough").innerHTML = `<h3>${scenario.name}</h3><p>${scenario.description}</p><div class="steps">${stepButtons}</div><p><button class="primary" id="restart-walkthrough">重新開始這條引導流程</button></p>`;
+  const current = document.querySelector(`#walkthrough button[data-step="${stepIndex}"]`);
+  if (current) current.addEventListener("click", () => dispatch(scenario.steps[stepIndex], true));
+  document.querySelector("#restart-walkthrough").addEventListener("click", () => chooseScenario(selectedScenario));
+
+  document.querySelector("#log").innerHTML = state.log.map(item => `<li>${item}</li>`).join("");
+}
+
+render();
+</script>
+</body>
+</html>
