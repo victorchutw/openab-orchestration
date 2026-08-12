@@ -1,0 +1,1235 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenAB Complete Loop — Throwaway Logic Prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d9deea;
+      --panel: #ffffff;
+      --wash: #f5f7fb;
+      --accent: #315bd6;
+      --accent-soft: #edf2ff;
+      --shadow: 0 14px 36px rgba(27, 39, 78, 0.09);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--wash);
+      line-height: 1.48;
+    }
+
+    button, input, textarea { font: inherit; }
+
+    button {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 8px 12px;
+      color: var(--ink);
+      background: var(--panel);
+      cursor: pointer;
+      text-align: left;
+    }
+
+    button:hover { border-color: var(--accent); }
+    button.primary { color: #fff; border-color: var(--accent); background: var(--accent); }
+    button.quiet { background: transparent; }
+    button.tab[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+    button.step[aria-current="step"] { border-color: var(--accent); box-shadow: inset 4px 0 0 var(--accent); }
+    button.step[data-done="true"] { color: var(--muted); background: var(--wash); }
+
+    input, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 10px 12px;
+      color: var(--ink);
+      background: var(--panel);
+    }
+
+    textarea { min-height: 74px; resize: vertical; }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.87em;
+    }
+
+    a { color: var(--accent); }
+
+    .shell { width: min(1480px, calc(100% - 32px)); margin: 0 auto; padding: 28px 0 64px; }
+    .intro, .panel, .surface, .walkthroughs, .controls { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); box-shadow: var(--shadow); }
+    .intro { padding: 24px; }
+    .intro-grid { display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: start; }
+    .eyebrow { margin: 0 0 6px; color: var(--accent); font-size: 0.78rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
+    h1, h2, h3, h4, p { margin-top: 0; }
+    h1 { max-width: 900px; margin-bottom: 10px; font-size: clamp(1.9rem, 4vw, 3.2rem); line-height: 1.06; letter-spacing: -0.04em; }
+    h2 { margin-bottom: 6px; font-size: 1.35rem; }
+    h3 { margin-bottom: 8px; font-size: 1rem; }
+    h4 { margin-bottom: 6px; font-size: 0.9rem; }
+    .lede { max-width: 980px; margin: 0; color: var(--muted); font-size: 1.02rem; }
+    .throwaway { max-width: 280px; border-left: 4px solid var(--accent); padding: 10px 14px; background: var(--accent-soft); font-size: 0.88rem; }
+
+    .question { margin-top: 16px; padding: 14px 16px; border-radius: 11px; background: var(--wash); }
+    .question strong { color: var(--accent); }
+
+    .walkthroughs { margin-top: 20px; padding: 20px; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+    .walkthrough-copy { max-width: 920px; color: var(--muted); }
+    .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+    .step-number { display: block; color: var(--accent); font-size: 0.75rem; font-weight: 800; text-transform: uppercase; }
+
+    .section-heading { display: flex; justify-content: space-between; gap: 16px; align-items: end; margin: 26px 0 10px; }
+    .section-heading p { max-width: 760px; margin: 0; color: var(--muted); }
+
+    .state-panel { padding: 20px; }
+    .state-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .metric { min-height: 90px; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--wash); }
+    .metric dt { margin-bottom: 5px; color: var(--muted); font-size: 0.76rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+    .metric dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+    .metric small { display: block; margin-top: 5px; color: var(--muted); font-weight: 400; }
+
+    .exchange { margin-top: 12px; padding: 12px 14px; border-left: 4px solid var(--accent); border-radius: 8px; background: var(--accent-soft); }
+    .exchange strong { text-transform: capitalize; }
+
+    .surfaces { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(330px, 0.65fr); gap: 16px; align-items: start; }
+    .surface { overflow: hidden; }
+    .surface-header { display: flex; justify-content: space-between; gap: 14px; padding: 16px 18px; border-bottom: 1px solid var(--line); background: var(--wash); }
+    .surface-header p { margin: 3px 0 0; color: var(--muted); font-size: 0.88rem; }
+    .surface-body { padding: 18px; }
+    .tag { display: inline-flex; align-items: center; min-height: 27px; border: 1px solid var(--line); border-radius: 99px; padding: 4px 9px; background: var(--panel); font-size: 0.78rem; white-space: nowrap; }
+    .tag.accent { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+    .stack { display: grid; gap: 12px; }
+    .two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .card { padding: 13px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel); }
+    .card p:last-child { margin-bottom: 0; }
+    .muted { color: var(--muted); }
+    .empty { padding: 22px; border: 1px dashed var(--line); border-radius: 11px; color: var(--muted); text-align: center; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .actions button { flex: 1 1 150px; }
+    .offer-token { display: block; margin-top: 4px; opacity: 0.68; font-size: 0.68rem; }
+
+    .target { border-left: 4px solid var(--accent); }
+    .target-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .target-grid span { display: block; color: var(--muted); font-size: 0.72rem; text-transform: uppercase; }
+    .diff { overflow: hidden; padding: 0; }
+    .diff-head { display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--wash); }
+    .diff pre { margin: 0; padding: 12px; overflow-x: auto; font-size: 0.8rem; line-height: 1.55; }
+    .diff .add { color: #244a9c; }
+    .diff .del { color: #73414d; }
+    .github-manual { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .github-step { padding: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--wash); font-size: 0.82rem; }
+    .github-step strong { display: block; }
+
+    .phone-wrap { padding: 18px; background: #e9edf5; }
+    .phone { max-width: 430px; margin: 0 auto; overflow: hidden; border: 9px solid #20293a; border-radius: 31px; background: #fff; box-shadow: 0 12px 30px rgba(23, 32, 51, 0.18); }
+    .phone-top { display: flex; justify-content: space-between; padding: 10px 16px; color: #fff; background: #20293a; font-size: 0.76rem; }
+    .dm-head { padding: 13px 16px; border-bottom: 1px solid var(--line); font-weight: 800; }
+    .messages { min-height: 520px; max-height: 690px; overflow-y: auto; padding: 14px; background: #f8f9fc; }
+    .message { margin-bottom: 11px; padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    .message.attention { border-left: 4px solid var(--accent); }
+    .message small { color: var(--muted); }
+    .run-card { border-top: 4px solid var(--accent); }
+    .run-card dl { display: grid; grid-template-columns: 95px 1fr; gap: 4px 8px; margin: 10px 0; font-size: 0.82rem; }
+    .run-card dt { color: var(--muted); }
+    .run-card dd { margin: 0; font-weight: 700; overflow-wrap: anywhere; }
+    .mobile-compose { display: grid; gap: 8px; margin-top: 10px; }
+    .mobile-compose .actions button { flex-basis: 125px; }
+    .mobile-limit { margin: 8px 0 0; color: var(--muted); font-size: 0.76rem; }
+
+    .controls { margin-top: 20px; padding: 20px; }
+    .control-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    .button-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 7px; }
+    .control-note { margin-bottom: 10px; color: var(--muted); font-size: 0.86rem; }
+    .diagnostics { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+
+    .ledger { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+    .list { max-height: 255px; overflow: auto; margin: 0; padding: 0; list-style: none; }
+    .list li { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 0.82rem; }
+    .list li:last-child { border-bottom: 0; }
+    .list strong { display: block; }
+
+    @media (max-width: 1000px) {
+      .surfaces, .control-grid { grid-template-columns: 1fr; }
+      .state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 650px) {
+      .shell { width: min(100% - 18px, 1480px); padding-top: 10px; }
+      .intro-grid, .two-col, .ledger, .target-grid, .github-manual { grid-template-columns: 1fr; }
+      .state-grid { grid-template-columns: 1fr; }
+      .throwaway { max-width: none; }
+      .section-heading { align-items: start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="intro">
+      <div class="intro-grid">
+        <div>
+          <p class="eyebrow">Throwaway logic prototype</p>
+          <h1>Feel the complete coding, review, and remediation loop.</h1>
+          <p class="lede">Drive one authoritative Run through two replaceable Operator Interfaces. The PC surface and the Discord-like mobile DM both call the same Runtime Core <code>Observe</code>/<code>Act</code> interface; neither can patch lifecycle state.</p>
+        </div>
+        <aside class="throwaway">
+          <strong>Prototype — do not ship.</strong><br>
+          In-memory state, fake actors, fake revisions, no network, no GitHub mutation, and no agent runtime.
+        </aside>
+      </div>
+      <div class="question">
+        <strong>Question being tested:</strong> Is a stage-plus-condition Run, one durable mobile Run Card, capability-backed actions, PC-only exact-target acceptance, decision-isolated dual review, and at most one remediation understandable enough to plan the production implementation?
+      </div>
+    </section>
+
+    <section class="walkthroughs" aria-labelledby="walkthrough-title">
+      <h2 id="walkthrough-title">Guided walkthroughs</h2>
+      <p class="walkthrough-copy">Choose a scenario to reset to a known state, then press its steps in order. The awkward cases are intentional: repeated input, stale controls, uncertain cancellation, late output, and immutable terminal history.</p>
+      <div id="scenario-tabs" class="tabs" role="tablist"></div>
+      <p id="scenario-description" class="walkthrough-copy"></p>
+      <div id="scenario-steps" class="steps"></div>
+    </section>
+
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Authoritative projection</p>
+        <h2>Current Runtime Core state</h2>
+      </div>
+      <button id="reset" class="quiet">Reset prototype</button>
+    </div>
+    <section class="panel state-panel" aria-live="polite">
+      <dl id="state-grid" class="state-grid"></dl>
+      <div id="last-exchange" class="exchange"></div>
+    </section>
+
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Two adapters, one seam</p>
+        <h2>Operator experience</h2>
+      </div>
+      <p>Actions appear only when the Runtime Core offers them. A surface sends an opaque capability plus a payload; accepted receipts, not clicks or transport acknowledgements, move the Run.</p>
+    </div>
+
+    <section class="surfaces">
+      <article class="surface" aria-labelledby="pc-title">
+        <header class="surface-header">
+          <div>
+            <h2 id="pc-title">PC inspection surface</h2>
+            <p>Exact target, linked draft-PR diff, Reports, Synthesis, and product decision.</p>
+          </div>
+          <span class="tag accent">Observe / Act</span>
+        </header>
+        <div id="pc-surface" class="surface-body"></div>
+      </article>
+
+      <article class="surface" aria-labelledby="mobile-title">
+        <header class="surface-header">
+          <div>
+            <h2 id="mobile-title">Discord-like mobile DM</h2>
+            <p>One durable Run Card plus exceptional attention messages.</p>
+          </div>
+          <span class="tag accent">No Accept</span>
+        </header>
+        <div class="phone-wrap">
+          <div class="phone">
+            <div class="phone-top"><span>9:41</span><span>Operator DM</span><span>●●●</span></div>
+            <div class="dm-head">OpenAB Runtime Core</div>
+            <div id="mobile-surface" class="messages"></div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="controls" aria-labelledby="free-play-title">
+      <h2 id="free-play-title">Free play</h2>
+      <p class="control-note">Every button remains clickable. If its action or fact is illegal now, the Runtime Core rejects it without advancing the commit cursor. Use this area to try sequences the guided walkthroughs do not cover.</p>
+      <div class="control-grid">
+        <div>
+          <h3>Operator Actions</h3>
+          <label for="free-text" class="muted">Payload text for objective, revision, answer, or reason</label>
+          <textarea id="free-text">Reduce flaky retries without changing public behavior.</textarea>
+          <div id="operator-controls" class="button-grid" style="margin-top: 9px"></div>
+        </div>
+        <div>
+          <h3>Simulated observed facts</h3>
+          <p class="control-note">These stand in for evidence-bearing Execution Adapter Reports and reconciled Publisher observations. They are not Operator Actions.</p>
+          <div id="fact-controls" class="button-grid"></div>
+        </div>
+      </div>
+      <div class="diagnostics">
+        <h3>Receipt and capability checks</h3>
+        <div class="button-grid">
+          <button id="replay-request">Replay the last exact request</button>
+          <button id="stale-control">Use a stale mobile Cancel control</button>
+          <button id="id-collision">Reuse the last request ID with changed content</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Full relevant state</p>
+        <h2>Receipts, audit, and projection effects</h2>
+      </div>
+      <p>The mobile card is routinely edited in place. New DMs are reserved for Operator waits, cancellation uncertainty, Integrity Incidents, and terminal outcomes.</p>
+    </div>
+    <section class="panel state-panel">
+      <div id="ledger" class="ledger"></div>
+    </section>
+  </main>
+
+  <!-- Portable logic module. It has no DOM access and can be lifted out of this page. -->
+  <script>
+    const RuntimeCoreModel = (() => {
+      const ACTION_LABELS = Object.freeze({
+        submitObjective: "Submit objective",
+        confirmPlan: "Confirm Run Plan",
+        revisePlan: "Revise Run Plan",
+        answerQuestion: "Answer Agent question",
+        retryParticipation: "Retry required participation",
+        wait: "Keep waiting",
+        authorizeRemediation: "Authorize one remediation",
+        proceedToFinal: "Proceed to Final Decision",
+        accept: "Accept exact Review Target",
+        abandon: "Abandon Run",
+        cancel: "Cancel Run"
+      });
+
+      const FACT_LABELS = Object.freeze({
+        planReady: "Orchestrator proposes Run Plan",
+        codingQuestion: "Coding Agent asks a necessary question",
+        candidateSealed: "Coding result seals initial Review Target",
+        reviewerAClear: "Reviewer A reports clear",
+        reviewerAFinding: "Reviewer A reports a finding",
+        reviewerBClear: "Reviewer B reports clear",
+        reviewerBFinding: "Reviewer B reports a finding",
+        reviewerBFailure: "Reviewer B ends without a valid Report",
+        synthesisReady: "Orchestrator submits Review Synthesis",
+        remediationSealed: "Remediation seals a new Review Target",
+        draftPrVerified: "Publisher verifies immutable draft PR",
+        cancellationConverged: "Worker proves stop or isolation",
+        lateCandidateObserved: "Late Coding output arrives after cancellation",
+        integrityIncident: "Integrity validation discovers a defect"
+      });
+
+      const clone = value => JSON.parse(JSON.stringify(value));
+      const canonicalize = value => {
+        if (Array.isArray(value)) return value.map(canonicalize);
+        if (value && typeof value === "object") {
+          return Object.keys(value).sort().reduce((result, key) => {
+            result[key] = canonicalize(value[key]);
+            return result;
+          }, {});
+        }
+        return value;
+      };
+      const fingerprint = value => JSON.stringify(canonicalize(value));
+      const short = value => value ? `${value.slice(0, 12)}…` : "—";
+
+      function initialState() {
+        return {
+          cursor: 0,
+          run: null,
+          receipts: {},
+          audit: [],
+          projectionEffects: {
+            runCard: null,
+            attention: []
+          },
+          lateEvidence: []
+        };
+      }
+
+      function createRun(objective) {
+        return {
+          id: "RUN-2026-001",
+          objective,
+          stage: "Planning",
+          condition: "Active",
+          reviewRound: null,
+          outcome: null,
+          actor: "Orchestrator Agent",
+          next: "An execution-ready Run Plan",
+          waitingReason: null,
+          activeWork: true,
+          lastTransition: "Objective accepted",
+          plan: {
+            status: "Drafting",
+            revision: 0,
+            scope: "Change retry handling only; preserve public behavior.",
+            acceptance: "Targeted tests pass and both Reviewer Reports are valid.",
+            remediationAllowance: "At most one in-boundary remediation",
+            reviewerDiversity: "Diverse Serving Providers"
+          },
+          target: null,
+          reports: newReports(null),
+          synthesis: null,
+          remediationUsed: false,
+          unresolvedFindings: [],
+          question: null,
+          missingParticipation: null,
+          cancellation: {
+            requested: false,
+            uncertain: false,
+            desiredOutcome: null,
+            disposition: "Not requested"
+          },
+          publication: {
+            status: "Unavailable",
+            pullRequest: null,
+            exactHeadVerified: false
+          },
+          operatorDecision: null,
+          integrityIncidents: []
+        };
+      }
+
+      function newReports(targetDigest) {
+        return {
+          reviewerA: {
+            identity: "Reviewer Agent A",
+            provider: "Provider North",
+            status: targetDigest ? "Running" : "Not started",
+            targetDigest,
+            siblingReportVisible: false,
+            finding: null,
+            replacementUsed: false
+          },
+          reviewerB: {
+            identity: "Reviewer Agent B",
+            provider: "Provider South",
+            status: targetDigest ? "Running" : "Not started",
+            targetDigest,
+            siblingReportVisible: false,
+            finding: null,
+            replacementUsed: false
+          }
+        };
+      }
+
+      function makeTarget(round) {
+        if (round === "Initial") {
+          return {
+            round,
+            base: "4f70a91",
+            head: "91c8e24",
+            digest: "sha256:4b9d9fe317ec72e04f1f6d48ae77b678",
+            evidence: "sha256:1bba28213d84d1559a5fa6ac9fd62018",
+            diff: ["src/retry-policy.ts  +12 −4", "test/retry-policy.test.ts  +26 −0"]
+          };
+        }
+        return {
+          round,
+          base: "4f70a91",
+          head: "b263fd0",
+          digest: "sha256:59f1358837e9f927fe2ddfdb7964564f",
+          evidence: "sha256:0ac81b507b26362874f7d9560f747494",
+          diff: ["src/retry-policy.ts  +16 −5", "test/retry-policy.test.ts  +41 −0"]
+        };
+      }
+
+      function actionKinds(state, surface) {
+        if (!state.run) return ["submitObjective"];
+        const run = state.run;
+        if (run.condition === "Terminal") return [];
+        if (run.condition === "Cancelling") return ["wait"];
+
+        const kinds = [];
+        if (run.condition === "Waiting for Operator") {
+          if (run.waitingReason === "Run Plan confirmation") kinds.push("confirmPlan", "revisePlan", "abandon");
+          if (run.waitingReason === "Necessary Agent question") kinds.push("answerQuestion", "abandon");
+          if (run.waitingReason === "Missing required Reviewer participation") kinds.push("retryParticipation", "wait", "abandon");
+          if (run.waitingReason === "Remediation eligibility") kinds.push("authorizeRemediation", "proceedToFinal", "abandon");
+          if (run.waitingReason === "Final Operator Decision") {
+            if (surface === "pc") kinds.push("accept");
+            kinds.push("abandon");
+          }
+          if (run.waitingReason === "Integrity Incident") kinds.push("abandon");
+        }
+
+        if (!kinds.includes("cancel") && run.waitingReason !== "Final Operator Decision") kinds.push("cancel");
+        return [...new Set(kinds)];
+      }
+
+      function offerToken(state, surface, kind) {
+        return `op:${surface}:r${state.cursor}:${kind}:8d70f4`;
+      }
+
+      function observe(state, surface = "pc") {
+        return {
+          cursor: state.cursor,
+          run: clone(state.run),
+          offers: actionKinds(state, surface).map(kind => ({
+            kind,
+            label: ACTION_LABELS[kind],
+            token: offerToken(state, surface, kind),
+            payloadConstraint: ["submitObjective", "revisePlan", "answerQuestion", "abandon"].includes(kind)
+              ? "Constrained text"
+              : kind === "accept" && state.run && state.run.unresolvedFindings.length
+                ? "Recorded reason required"
+                : "No free text"
+          }))
+        };
+      }
+
+      function factKinds(state) {
+        if (!state.run) return [];
+        const run = state.run;
+        const kinds = [];
+        if (run.condition === "Terminal") return ["integrityIncident"];
+        if (run.condition === "Cancelling") return ["lateCandidateObserved", "cancellationConverged", "integrityIncident"];
+        if (run.stage === "Planning" && run.condition === "Active") kinds.push("planReady");
+        if (run.stage === "Coding" && run.condition === "Active") kinds.push("codingQuestion", "candidateSealed");
+        if (run.stage === "Reviewing" && run.condition === "Active") {
+          if (run.reports.reviewerA.status === "Running") kinds.push("reviewerAClear", "reviewerAFinding");
+          if (run.reports.reviewerB.status === "Running") kinds.push("reviewerBClear", "reviewerBFinding", "reviewerBFailure");
+        }
+        if (run.stage === "Synthesizing" && run.condition === "Active") kinds.push("synthesisReady");
+        if (run.stage === "Remediating" && run.condition === "Active") kinds.push("remediationSealed");
+        if (run.stage === "Final Decision" && run.condition === "Active" && run.publication.status === "Publishing") kinds.push("draftPrVerified");
+        kinds.push("integrityIncident");
+        return [...new Set(kinds)];
+      }
+
+      function pull(state) {
+        return {
+          cursor: state.cursor,
+          directives: factKinds(state).map(kind => ({
+            kind,
+            label: FACT_LABELS[kind],
+            capability: `exec:r${state.cursor}:${kind}:3ca19e`
+          }))
+        };
+      }
+
+      function terminalize(run, outcome, reason) {
+        run.condition = "Terminal";
+        run.outcome = outcome;
+        run.actor = "Operator";
+        run.next = outcome === "Accepted" ? "Manual GitHub ready-for-review and merge, outside the Run" : "No further action in this Run";
+        run.waitingReason = null;
+        run.activeWork = false;
+        run.operatorDecision = { outcome, reason: reason || "No reason supplied" };
+        run.lastTransition = `Run Outcome committed: ${outcome}`;
+      }
+
+      function enterFinalDecision(run) {
+        run.stage = "Final Decision";
+        run.condition = "Active";
+        run.actor = "GitHub Publisher";
+        run.next = "Verify the sealed head and one draft pull request";
+        run.waitingReason = null;
+        run.activeWork = true;
+        run.publication = { status: "Publishing", pullRequest: null, exactHeadVerified: false };
+        run.lastTransition = "Final Review Target selected; publication Effect Intent active";
+      }
+
+      function applyOperator(state, request) {
+        const next = clone(state);
+        const text = (request.payload && request.payload.text || "").trim();
+        if (request.kind === "submitObjective") {
+          next.run = createRun(text || "Reduce flaky retries without changing public behavior.");
+          return next;
+        }
+
+        const run = next.run;
+        switch (request.kind) {
+          case "confirmPlan":
+            run.plan.status = "Confirmed";
+            run.stage = "Coding";
+            run.condition = "Active";
+            run.actor = "Coding Agent";
+            run.next = "A validated Candidate Change or necessary question";
+            run.waitingReason = null;
+            run.activeWork = true;
+            run.lastTransition = "Run Plan confirmed; Coding authorized";
+            break;
+          case "revisePlan":
+            run.plan.status = "Drafting";
+            run.plan.revision += 1;
+            run.plan.scope = text || "Revise the retry boundary without expanding public behavior.";
+            run.condition = "Active";
+            run.actor = "Orchestrator Agent";
+            run.next = "A revised execution-ready Run Plan";
+            run.waitingReason = null;
+            run.activeWork = true;
+            run.lastTransition = "Pre-confirmation Run Plan revision requested";
+            break;
+          case "answerQuestion":
+            run.condition = "Active";
+            run.actor = run.stage === "Coding" ? "Coding Agent" : "Orchestrator Agent";
+            run.next = "A new Execution under an immutable answered context";
+            run.question = { ...run.question, answer: text || "Preserve the existing public retry count." };
+            run.waitingReason = null;
+            run.activeWork = true;
+            run.lastTransition = "Operator answer accepted; new Execution authorized";
+            break;
+          case "retryParticipation": {
+            const key = run.missingParticipation || "reviewerB";
+            run.reports[key].status = "Running";
+            run.reports[key].replacementUsed = true;
+            run.missingParticipation = null;
+            run.condition = "Active";
+            run.actor = run.reports[key].identity;
+            run.next = "One valid Report from the missing required identity";
+            run.waitingReason = null;
+            run.activeWork = true;
+            run.lastTransition = "One safe failure replacement authorized";
+            break;
+          }
+          case "wait":
+            run.lastTransition = run.condition === "Cancelling"
+              ? "Operator acknowledged uncertain cancellation and kept waiting"
+              : "Operator chose to keep the current wait";
+            break;
+          case "authorizeRemediation":
+            run.remediationUsed = true;
+            run.stage = "Remediating";
+            run.condition = "Active";
+            run.actor = "Coding Agent";
+            run.next = "One in-boundary remediated Candidate Change";
+            run.waitingReason = null;
+            run.activeWork = true;
+            run.lastTransition = "Single remediation allowance consumed";
+            break;
+          case "proceedToFinal":
+            enterFinalDecision(run);
+            break;
+          case "accept":
+            terminalize(run, "Accepted", text);
+            break;
+          case "abandon":
+            if (run.activeWork || run.condition === "Active") {
+              run.condition = "Cancelling";
+              run.cancellation = { requested: true, uncertain: true, desiredOutcome: "Abandoned", disposition: "Converging" };
+              run.actor = "Execution Worker / Publisher";
+              run.next = "Proof that work and effects stopped or are isolated";
+              run.waitingReason = null;
+              run.lastTransition = "Abandonment requested; cancellation convergence required";
+            } else {
+              terminalize(run, "Abandoned", text);
+            }
+            break;
+          case "cancel":
+            run.condition = "Cancelling";
+            run.cancellation = { requested: true, uncertain: true, desiredOutcome: "Cancelled", disposition: "Converging" };
+            run.actor = "Execution Worker / Publisher";
+            run.next = "Proof that work and effects stopped or are isolated";
+            run.waitingReason = null;
+            run.activeWork = true;
+            run.lastTransition = "Cancellation accepted; progress fenced, convergence uncertain";
+            break;
+        }
+        return next;
+      }
+
+      function reportReview(run, reviewerKey, finding) {
+        const report = run.reports[reviewerKey];
+        report.status = "Accepted Report";
+        report.finding = finding ? "Retry exhaustion can still emit a duplicate metric." : "No blocking finding.";
+        report.siblingReportVisible = false;
+        const both = [run.reports.reviewerA, run.reports.reviewerB].every(item => item.status === "Accepted Report");
+        if (both) {
+          run.stage = "Synthesizing";
+          run.condition = "Active";
+          run.actor = "Orchestrator Agent";
+          run.next = "A provenance-preserving Review Synthesis";
+          run.activeWork = true;
+          run.lastTransition = "Both required isolated Review Reports accepted";
+        } else {
+          run.actor = reviewerKey === "reviewerA" ? "Reviewer Agent B" : "Reviewer Agent A";
+          run.next = "The other required isolated Review Report";
+          run.lastTransition = `${report.identity} Report accepted; sibling remains isolated`;
+        }
+      }
+
+      function applyFact(state, fact) {
+        const next = clone(state);
+        const run = next.run;
+        switch (fact.kind) {
+          case "planReady":
+            run.plan.status = "Proposed";
+            run.condition = "Waiting for Operator";
+            run.actor = "Operator";
+            run.next = "Confirm, revise, or abandon the Run Plan";
+            run.waitingReason = "Run Plan confirmation";
+            run.activeWork = false;
+            run.lastTransition = "Execution-ready Run Plan accepted from Orchestrator";
+            break;
+          case "codingQuestion":
+            run.condition = "Waiting for Operator";
+            run.actor = "Operator";
+            run.next = "A constrained answer, Cancel, or Abandon";
+            run.waitingReason = "Necessary Agent question";
+            run.activeWork = false;
+            run.question = { prompt: "Should the existing public retry count remain unchanged?", answer: null };
+            run.lastTransition = "Necessary Coding Agent question validated";
+            break;
+          case "candidateSealed": {
+            run.reviewRound = "Initial";
+            run.target = makeTarget("Initial");
+            run.reports = newReports(run.target.digest);
+            run.stage = "Reviewing";
+            run.condition = "Active";
+            run.actor = "Reviewer Agents A and B";
+            run.next = "Two valid, decision-isolated Reports on the exact same target";
+            run.activeWork = true;
+            run.lastTransition = "Writer stopped; immutable initial Review Target sealed";
+            break;
+          }
+          case "reviewerAClear": reportReview(run, "reviewerA", false); break;
+          case "reviewerAFinding": reportReview(run, "reviewerA", true); break;
+          case "reviewerBClear": reportReview(run, "reviewerB", false); break;
+          case "reviewerBFinding": reportReview(run, "reviewerB", true); break;
+          case "reviewerBFailure":
+            run.reports.reviewerB.status = "Ended invalid";
+            run.missingParticipation = "reviewerB";
+            run.condition = "Waiting for Operator";
+            run.actor = "Operator";
+            run.next = "Retry required participation, wait, cancel, or abandon";
+            run.waitingReason = "Missing required Reviewer participation";
+            run.activeWork = false;
+            run.lastTransition = "Reviewer B ended without a valid Report; policy not reduced";
+            break;
+          case "synthesisReady": {
+            const findings = [run.reports.reviewerA, run.reports.reviewerB]
+              .map(item => item.finding)
+              .filter(item => item && item !== "No blocking finding.");
+            run.unresolvedFindings = findings;
+            run.synthesis = {
+              status: "Accepted",
+              comparedTarget: run.target.digest,
+              reviewerA: run.reports.reviewerA.finding,
+              reviewerB: run.reports.reviewerB.finding,
+              recommendation: findings.length && !run.remediationUsed ? "One in-boundary remediation" : "Proceed to Final Decision"
+            };
+            if (findings.length && !run.remediationUsed) {
+              run.condition = "Waiting for Operator";
+              run.actor = "Operator";
+              run.next = "Authorize one remediation, proceed to Final Decision, or abandon";
+              run.waitingReason = "Remediation eligibility";
+              run.activeWork = false;
+              run.lastTransition = "Synthesis accepted; remediation eligibility needs authority";
+            } else {
+              enterFinalDecision(run);
+            }
+            break;
+          }
+          case "remediationSealed":
+            run.reviewRound = "Remediated";
+            run.target = makeTarget("Remediated");
+            run.reports = newReports(run.target.digest);
+            run.synthesis = null;
+            run.unresolvedFindings = [];
+            run.stage = "Reviewing";
+            run.condition = "Active";
+            run.actor = "Reviewer Agents A and B";
+            run.next = "Two new isolated Reports; initial Reports remain evidence only";
+            run.activeWork = true;
+            run.lastTransition = "New immutable remediated Review Target sealed";
+            break;
+          case "draftPrVerified":
+            run.publication = {
+              status: "Verified draft",
+              pullRequest: { number: 42, urlLabel: "Draft PR #42 diff", base: run.target.base, head: run.target.head },
+              exactHeadVerified: true
+            };
+            run.condition = "Waiting for Operator";
+            run.actor = "Operator on PC";
+            run.next = "Inspect exact diff, Reports, Synthesis, then Accept or Abandon";
+            run.waitingReason = "Final Operator Decision";
+            run.activeWork = false;
+            run.lastTransition = "Draft PR projection reconciled to exact sealed head";
+            break;
+          case "lateCandidateObserved":
+            next.lateEvidence.push({
+              cursorObserved: state.cursor + 1,
+              source: "Coding Execution",
+              disposition: "Retained as late evidence; cannot advance the fenced Run"
+            });
+            run.lastTransition = "Late output retained without lifecycle authority";
+            break;
+          case "cancellationConverged": {
+            const outcome = run.cancellation.desiredOutcome || "Cancelled";
+            run.cancellation.uncertain = false;
+            run.cancellation.disposition = "Stopped or isolated with evidence";
+            terminalize(run, outcome, "Cancellation convergence completed");
+            break;
+          }
+          case "integrityIncident":
+            run.integrityIncidents.push({
+              id: `INC-${String(run.integrityIncidents.length + 1).padStart(3, "0")}`,
+              finding: "Published head verification no longer matches retained evidence.",
+              historicalOutcomePreserved: run.condition === "Terminal"
+            });
+            if (run.condition !== "Terminal") {
+              run.condition = "Waiting for Operator";
+              run.waitingReason = "Integrity Incident";
+              run.actor = "Operator";
+              run.next = "Inspect incident; no Accept offer remains";
+              run.activeWork = false;
+              run.publication.exactHeadVerified = false;
+            }
+            run.lastTransition = "Integrity Incident appended; history not rewritten";
+            break;
+        }
+        return next;
+      }
+
+      function attentionCategory(previous, next, eventKind) {
+        if (!next.run) return null;
+        if (eventKind === "integrityIncident") return "Integrity Incident";
+        const oldRun = previous.run;
+        if (next.run.condition === "Terminal" && (!oldRun || oldRun.condition !== "Terminal")) return `Terminal: ${next.run.outcome}`;
+        if (next.run.condition === "Cancelling" && (!oldRun || oldRun.condition !== "Cancelling")) return "Cancellation uncertainty";
+        if (next.run.condition === "Waiting for Operator" && (!oldRun || oldRun.waitingReason !== next.run.waitingReason)) return `Operator wait: ${next.run.waitingReason}`;
+        return null;
+      }
+
+      function finalize(previous, candidate, meta, receipt = null) {
+        const next = clone(candidate);
+        next.cursor = previous.cursor + 1;
+        if (next.run) next.run.lastTransition = next.run.lastTransition || meta.summary;
+        next.audit.push({
+          cursor: next.cursor,
+          source: meta.source,
+          kind: meta.kind,
+          summary: next.run ? next.run.lastTransition : meta.summary
+        });
+        if (receipt) next.receipts[receipt.requestId] = { ...receipt, cursor: next.cursor };
+
+        if (next.run) {
+          next.projectionEffects.runCard = {
+            effectId: `effect:run-card:${next.run.id}`,
+            message: "One durable DM Run Card",
+            lastEditedCursor: next.cursor,
+            status: "Confirmed from Runtime Core projection"
+          };
+          const category = attentionCategory(previous, next, meta.kind);
+          if (category) {
+            next.projectionEffects.attention.push({
+              effectId: `effect:attention:${next.run.id}:r${next.cursor}`,
+              category,
+              status: "Confirmed once"
+            });
+          }
+        }
+        return next;
+      }
+
+      function operator(state, request) {
+        const existing = state.receipts[request.requestId];
+        const content = fingerprint({ offer: request.offer, kind: request.kind, payload: request.payload || {} });
+        if (existing) {
+          if (existing.content === content) {
+            return {
+              state,
+              reply: { status: "duplicate", reason: "Original durable receipt returned; no transition repeated.", requestId: request.requestId, cursor: existing.cursor }
+            };
+          }
+          return {
+            state,
+            reply: { status: "rejected", reason: "Request ID was already used with different content.", requestId: request.requestId, cursor: state.cursor }
+          };
+        }
+
+        const offer = observe(state, request.surface).offers.find(item => item.kind === request.kind && item.token === request.offer);
+        if (!offer) {
+          return {
+            state,
+            reply: { status: "rejected", reason: "Offer is stale, mismatched, consumed, or unavailable on this surface.", requestId: request.requestId, cursor: state.cursor }
+          };
+        }
+        if (request.kind === "accept" && state.run.unresolvedFindings.length && !(request.payload && request.payload.text || "").trim()) {
+          return {
+            state,
+            reply: { status: "rejected", reason: "Accepting with unresolved findings requires a recorded reason.", requestId: request.requestId, cursor: state.cursor }
+          };
+        }
+
+        const candidate = applyOperator(state, request);
+        const receipt = { requestId: request.requestId, content, action: request.kind, status: "accepted" };
+        const next = finalize(state, candidate, { source: `Operator via ${request.surface}`, kind: request.kind, summary: ACTION_LABELS[request.kind] }, receipt);
+        return {
+          state: next,
+          reply: { status: "accepted", reason: "Durable Runtime Core receipt committed.", requestId: request.requestId, cursor: next.cursor }
+        };
+      }
+
+      function report(state, fact) {
+        const directive = pull(state).directives.find(item => item.kind === fact.kind && item.capability === fact.capability);
+        if (!directive) {
+          return {
+            state,
+            reply: { status: "rejected", reason: "Observed fact has no current directive capability.", requestId: fact.factId, cursor: state.cursor }
+          };
+        }
+        const candidate = applyFact(state, fact);
+        const next = finalize(state, candidate, { source: "Execution Adapter / Publisher", kind: fact.kind, summary: FACT_LABELS[fact.kind] });
+        return {
+          state: next,
+          reply: { status: fact.kind === "lateCandidateObserved" ? "retained" : "accepted", reason: fact.kind === "lateCandidateObserved" ? "Late evidence retained without establishing Completion." : "Observed fact validated and committed.", requestId: fact.factId, cursor: next.cursor }
+        };
+      }
+
+      return Object.freeze({
+        ACTION_LABELS,
+        FACT_LABELS,
+        initialState,
+        observe,
+        pull,
+        operator,
+        report,
+        offerToken,
+        short
+      });
+    })();
+  </script>
+
+  <!-- Throwaway page shell. It owns DOM, local form values, and scenario playback only. -->
+  <script>
+    (() => {
+      let state = RuntimeCoreModel.initialState();
+      let requestSequence = 0;
+      let factSequence = 0;
+      let lastExchange = { status: "ready", reason: "Choose a walkthrough or submit an objective.", cursor: 0, requestId: "—" };
+      let lastRequest = null;
+      let activeScenario = 0;
+      let activeStep = 0;
+
+      const scenarios = [
+        {
+          name: "Nominal Run",
+          description: "Watch the exact target move through two isolated Reviewer Reports and Synthesis, then make the product Accept decision on PC. The draft remains draft; ready-for-review and merge stay manual GitHub actions.",
+          steps: [
+            op("Submit objective on mobile", "submitObjective", "mobile"),
+            fact("Receive proposed Run Plan", "planReady"),
+            op("Confirm plan on mobile", "confirmPlan", "mobile"),
+            fact("Seal initial Review Target", "candidateSealed"),
+            fact("Reviewer A reports clear", "reviewerAClear"),
+            fact("Reviewer B reports clear", "reviewerBClear"),
+            fact("Accept Review Synthesis", "synthesisReady"),
+            fact("Verify immutable draft PR", "draftPrVerified"),
+            op("Accept exact target on PC", "accept", "pc")
+          ]
+        },
+        {
+          name: "One Remediation",
+          description: "A finding creates an Operator wait. Authorize the single in-boundary remediation, seal a new target, and require two new Reports. Initial Reports remain evidence but cannot satisfy the remediated round.",
+          steps: [
+            op("Submit objective", "submitObjective", "mobile"), fact("Propose Run Plan", "planReady"), op("Confirm plan", "confirmPlan", "mobile"),
+            fact("Seal initial Review Target", "candidateSealed"), fact("Reviewer A finds an issue", "reviewerAFinding"), fact("Reviewer B reports clear", "reviewerBClear"),
+            fact("Synthesize disagreement", "synthesisReady"), op("Authorize one remediation", "authorizeRemediation", "mobile"), fact("Seal remediated target", "remediationSealed"),
+            fact("Reviewer A re-reviews", "reviewerAClear"), fact("Reviewer B re-reviews", "reviewerBClear"), fact("Synthesize remediated round", "synthesisReady"),
+            fact("Verify immutable draft PR", "draftPrVerified"), op("Accept on PC", "accept", "pc")
+          ]
+        },
+        {
+          name: "Mobile Receipts",
+          description: "A Discord interaction acknowledgement is not authority. The first Confirm gets a durable receipt, an exact replay returns that receipt without another transition, and an old Cancel button is rejected as stale.",
+          steps: [
+            op("Submit objective in DM", "submitObjective", "mobile"), fact("Propose Run Plan", "planReady"), op("Confirm from opaque button", "confirmPlan", "mobile"),
+            diagnostic("Replay exact Confirm request", "replay"), diagnostic("Press stale mobile Cancel", "stale"), fact("Coding Agent asks a question", "codingQuestion"),
+            op("Answer constrained question", "answerQuestion", "mobile")
+          ]
+        },
+        {
+          name: "Cancellation",
+          description: "Cancel fences progress but does not claim a terminal outcome. Late Coding output is retained only as evidence. A terminal Integrity Incident appends a finding without rewriting the Run Outcome.",
+          steps: [
+            op("Submit objective", "submitObjective", "mobile"), fact("Propose Run Plan", "planReady"), op("Confirm plan", "confirmPlan", "mobile"),
+            op("Request Cancel on mobile", "cancel", "mobile"), fact("Observe late Coding output", "lateCandidateObserved"), fact("Prove stop or isolation", "cancellationConverged"),
+            fact("Append later Integrity Incident", "integrityIncident")
+          ]
+        },
+        {
+          name: "Missing Reviewer",
+          description: "One valid Report is retained while the other required identity fails. The mobile card exposes Retry, Wait, Cancel, or Abandon; it never silently reduces the dual-review policy.",
+          steps: [
+            op("Submit objective", "submitObjective", "mobile"), fact("Propose Run Plan", "planReady"), op("Confirm plan", "confirmPlan", "mobile"), fact("Seal initial target", "candidateSealed"),
+            fact("Reviewer A reports clear", "reviewerAClear"), fact("Reviewer B ends invalid", "reviewerBFailure"), op("Choose to keep waiting", "wait", "mobile"),
+            op("Retry only Reviewer B", "retryParticipation", "mobile"), fact("Replacement Reviewer B reports", "reviewerBClear")
+          ]
+        }
+      ];
+
+      function op(label, kind, surface, text) { return { label, type: "operator", kind, surface, text }; }
+      function fact(label, kind) { return { label, type: "fact", kind }; }
+      function diagnostic(label, kind) { return { label, type: "diagnostic", kind }; }
+      function escapeHtml(value) {
+        return String(value == null ? "—" : value).replace(/[&<>"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[char]));
+      }
+      function requestId() { requestSequence += 1; return `operator-request-${String(requestSequence).padStart(3, "0")}`; }
+      function factId() { factSequence += 1; return `observed-fact-${String(factSequence).padStart(3, "0")}`; }
+      function payloadText(kind, explicit) {
+        if (explicit) return explicit;
+        const value = document.getElementById("free-text").value.trim();
+        if (kind === "submitObjective") return value || "Reduce flaky retries without changing public behavior.";
+        if (kind === "revisePlan") return value || "Preserve the public retry count and narrow the scope to metrics.";
+        if (kind === "answerQuestion") return value || "Yes. Preserve the existing public retry count.";
+        if (kind === "accept") return value || "Reviewed the exact target, both Reports, Synthesis, and verification evidence.";
+        if (kind === "abandon") return value || "The objective is no longer worth pursuing.";
+        return "";
+      }
+
+      function dispatchOperator(kind, surface = "pc", text, overrides = {}) {
+        const view = RuntimeCoreModel.observe(state, surface);
+        const current = view.offers.find(item => item.kind === kind);
+        const request = {
+          requestId: overrides.requestId || requestId(),
+          surface,
+          kind,
+          offer: overrides.offer || (current ? current.token : `op:${surface}:r${state.cursor}:${kind}:unavailable`),
+          payload: { text: payloadText(kind, text) }
+        };
+        const result = RuntimeCoreModel.operator(state, request);
+        state = result.state;
+        lastExchange = result.reply;
+        lastRequest = request;
+        render();
+        return result.reply;
+      }
+
+      function dispatchFact(kind) {
+        const directive = RuntimeCoreModel.pull(state).directives.find(item => item.kind === kind);
+        const result = RuntimeCoreModel.report(state, {
+          factId: factId(),
+          kind,
+          capability: directive ? directive.capability : `exec:r${state.cursor}:${kind}:unavailable`
+        });
+        state = result.state;
+        lastExchange = result.reply;
+        render();
+        return result.reply;
+      }
+
+      function replayLastRequest() {
+        if (!lastRequest) {
+          lastExchange = { status: "rejected", reason: "There is no earlier Operator request to replay.", requestId: "—", cursor: state.cursor };
+          render();
+          return;
+        }
+        const result = RuntimeCoreModel.operator(state, lastRequest);
+        state = result.state;
+        lastExchange = result.reply;
+        render();
+      }
+
+      function useStaleControl() {
+        const staleRevision = Math.max(0, state.cursor - 1);
+        dispatchOperator("cancel", "mobile", "", { offer: `op:mobile:r${staleRevision}:cancel:8d70f4` });
+      }
+
+      function reuseIdWithChangedContent() {
+        if (!lastRequest) {
+          lastExchange = { status: "rejected", reason: "There is no earlier request ID to collide with.", requestId: "—", cursor: state.cursor };
+          render();
+          return;
+        }
+        dispatchOperator(lastRequest.kind, lastRequest.surface, `${lastRequest.payload.text} CHANGED`, { requestId: lastRequest.requestId, offer: lastRequest.offer });
+      }
+
+      function reset() {
+        state = RuntimeCoreModel.initialState();
+        requestSequence = 0;
+        factSequence = 0;
+        lastRequest = null;
+        lastExchange = { status: "ready", reason: "Known initial state restored.", requestId: "—", cursor: 0 };
+        activeStep = 0;
+        render();
+      }
+
+      function runStep(index) {
+        if (index !== activeStep) return;
+        const step = scenarios[activeScenario].steps[index];
+        if (step.type === "operator") dispatchOperator(step.kind, step.surface, step.text);
+        if (step.type === "fact") dispatchFact(step.kind);
+        if (step.type === "diagnostic" && step.kind === "replay") replayLastRequest();
+        if (step.type === "diagnostic" && step.kind === "stale") useStaleControl();
+        activeStep += 1;
+        render();
+      }
+
+      function selectScenario(index) {
+        activeScenario = index;
+        reset();
+      }
+
+      function metric(label, value, detail = "") {
+        return `<div class="metric"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}${detail ? `<small>${escapeHtml(detail)}</small>` : ""}</dd></div>`;
+      }
+
+      function renderState() {
+        const run = state.run;
+        const values = run ? [
+          metric("Commit cursor", `r${state.cursor}`, run.lastTransition),
+          metric("Run", run.id, run.objective),
+          metric("Stage / condition", `${run.stage} / ${run.condition}`, run.reviewRound ? `${run.reviewRound} Review Round` : "No Review Round yet"),
+          metric("Run Outcome", run.outcome || "Not terminal", run.outcome ? "Immutable" : "Operator authority remains open"),
+          metric("Current actor", run.actor, run.next),
+          metric("Operator wait", run.waitingReason || "None", run.condition === "Waiting for Operator"
+            ? "No short automatic expiry"
+            : run.condition === "Terminal"
+              ? "System-Attributable Duration stopped at the terminal commit"
+              : "System-Attributable Duration is running"),
+          metric("Review Target", run.target ? RuntimeCoreModel.short(run.target.digest) : "Not sealed", run.target ? `${run.target.base} → ${run.target.head}` : "Candidate Change remains mutable or absent"),
+          metric("Remediation", run.remediationUsed
+            ? "Allowance consumed"
+            : run.condition === "Terminal"
+              ? "Unused; Run is terminal"
+              : run.plan.status === "Confirmed"
+                ? "Available"
+                : "Preauthorized on confirmation", "Never more than one in this Run"),
+          metric("Reviewer A", run.reports.reviewerA.status, `${run.reports.reviewerA.provider}; sibling Report visible: no`),
+          metric("Reviewer B", run.reports.reviewerB.status, `${run.reports.reviewerB.provider}; sibling Report visible: no`),
+          metric("Draft publication", run.publication.status, run.publication.exactHeadVerified ? `Exact head ${run.target.head} verified` : "Cannot establish Accept"),
+          metric("Cancellation", run.cancellation.disposition, run.cancellation.uncertain ? "Non-terminal uncertainty" : "No unresolved cancellation uncertainty")
+        ] : [
+          metric("Commit cursor", "r0", "No accepted transition"),
+          metric("Run", "None", "Submit an objective from PC or mobile"),
+          metric("Stage / condition", "No active Run", "The lifecycle begins only after objective acceptance"),
+          metric("Operator authority", "Open", "One non-terminal Run is allowed")
+        ];
+        document.getElementById("state-grid").innerHTML = values.join("");
+        document.getElementById("last-exchange").innerHTML = `<strong>${escapeHtml(lastExchange.status)}</strong> · ${escapeHtml(lastExchange.reason)} <span class="muted">(${escapeHtml(lastExchange.requestId)} at r${escapeHtml(lastExchange.cursor)})</span>`;
+      }
+
+      function offerButtons(offers, surface) {
+        if (!offers.length) return `<div class="empty">No Operator Action is offered on this surface now.</div>`;
+        return `<div class="actions">${offers.map(offer => `<button data-action="${offer.kind}" data-surface="${surface}" class="${offer.kind === "accept" ? "primary" : ""}">${escapeHtml(offer.label)}<span class="offer-token"><code>${escapeHtml(RuntimeCoreModel.short(offer.token))}</code> · ${escapeHtml(offer.payloadConstraint)}</span></button>`).join("")}</div>`;
+      }
+
+      function reportsHtml(run) {
+        const report = item => `<div class="card"><h4>${escapeHtml(item.identity)}</h4><p><span class="tag">${escapeHtml(item.provider)}</span> <span class="tag">${escapeHtml(item.status)}</span></p><p>${escapeHtml(item.finding || "No accepted Report yet.")}</p><p class="muted">Target: <code>${escapeHtml(item.targetDigest ? RuntimeCoreModel.short(item.targetDigest) : "—")}</code><br>Sibling Report visible during Execution: <strong>no</strong></p></div>`;
+        return `<div class="two-col">${report(run.reports.reviewerA)}${report(run.reports.reviewerB)}</div>`;
+      }
+
+      function renderPc() {
+        const view = RuntimeCoreModel.observe(state, "pc");
+        const run = view.run;
+        if (!run) {
+          document.getElementById("pc-surface").innerHTML = `<div class="stack"><div class="empty">No Run. Submit an objective; the interface sends intent, not a lifecycle patch.</div>${offerButtons(view.offers, "pc")}</div>`;
+          return;
+        }
+        const target = run.target ? `
+          <div class="card target">
+            <h3>Exact ${escapeHtml(run.target.round)} Review Target</h3>
+            <div class="target-grid">
+              <div><span>Base</span><code>${escapeHtml(run.target.base)}</code></div>
+              <div><span>Head</span><code>${escapeHtml(run.target.head)}</code></div>
+              <div><span>Digest</span><code>${escapeHtml(RuntimeCoreModel.short(run.target.digest))}</code></div>
+            </div>
+            <p class="muted" style="margin-top: 9px">Frozen evidence: <code>${escapeHtml(RuntimeCoreModel.short(run.target.evidence))}</code></p>
+          </div>
+          <div id="diff" class="card diff">
+            <div class="diff-head"><strong>${run.publication.pullRequest ? `<a href="#diff">${escapeHtml(run.publication.pullRequest.urlLabel)}</a>` : "Local exact-target diff"}</strong><span>${escapeHtml(run.target.diff.join(" · "))}</span></div>
+            <pre><span class="del">-  retry(request, attempt + 1);</span>
+<span class="add">+  const next = retryPolicy.nextAttempt(request, attempt);</span>
+<span class="add">+  if (next.allowed) retry(request, next.number);</span>
+<span class="add">+  metrics.recordExhaustedOnce(request.id);</span></pre>
+          </div>` : `<div class="empty">No immutable Review Target exists yet. Candidate work cannot be accepted or reviewed by moving branch name.</div>`;
+        const synthesis = run.synthesis ? `<div class="card"><h3>Review Synthesis</h3><p><strong>${escapeHtml(run.synthesis.recommendation)}</strong></p><p>Reviewer A: ${escapeHtml(run.synthesis.reviewerA)}<br>Reviewer B: ${escapeHtml(run.synthesis.reviewerB)}</p><p class="muted">Compared exact target <code>${escapeHtml(RuntimeCoreModel.short(run.synthesis.comparedTarget))}</code>. Reports remain separate and immutable.</p></div>` : `<div class="empty">Review Synthesis is unavailable until both required Reports exist.</div>`;
+        const finalFlow = `<div class="card"><h3>Product decision versus GitHub actions</h3><div class="github-manual"><div class="github-step"><strong>1. Product Accept</strong>${run.outcome === "Accepted" ? "Committed by Runtime Core" : "Available only here after exact-head verification"}</div><div class="github-step"><strong>2. Ready for review</strong>Manual GitHub action after the Run</div><div class="github-step"><strong>3. Merge</strong>Manual GitHub action; unavailable to the Publisher</div></div></div>`;
+        document.getElementById("pc-surface").innerHTML = `<div class="stack">
+          <div class="card"><div class="actions"><span class="tag accent">${escapeHtml(run.stage)}</span><span class="tag">${escapeHtml(run.condition)}</span><span class="tag">r${view.cursor}</span></div><p style="margin-top: 10px"><strong>Next:</strong> ${escapeHtml(run.next)}</p></div>
+          ${target}
+          <div><h3>Independent Reviewer Reports</h3>${reportsHtml(run)}</div>
+          ${synthesis}
+          ${finalFlow}
+          <div class="card"><h3>Currently offered PC actions</h3><textarea id="pc-payload" placeholder="Required only for text-constrained actions">${escapeHtml(document.getElementById("free-text").value)}</textarea><div style="margin-top: 8px">${offerButtons(view.offers, "pc")}</div></div>
+        </div>`;
+      }
+
+      function mobilePrompt(offers) {
+        const textKinds = ["submitObjective", "revisePlan", "answerQuestion", "abandon"];
+        const textOffer = offers.find(item => textKinds.includes(item.kind));
+        if (!textOffer) return `<p class="mobile-limit">Free text is closed in this state. Reactions and ordinary chat are never authoritative actions.</p>`;
+        const labels = { submitObjective: "Objective", revisePlan: "Requested Run Plan revision", answerQuestion: "Answer", abandon: "Reason" };
+        return `<div class="mobile-compose"><label class="muted">${labels[textOffer.kind]}</label><textarea id="mobile-payload">${escapeHtml(document.getElementById("free-text").value)}</textarea></div><p class="mobile-limit">Text is accepted only for this offered action and its payload constraints.</p>`;
+      }
+
+      function renderMobile() {
+        const view = RuntimeCoreModel.observe(state, "mobile");
+        const run = view.run;
+        const notifications = state.projectionEffects.attention.slice(-4).map(item => `<div class="message attention"><strong>${escapeHtml(item.category)}</strong><br><small>${escapeHtml(item.effectId)} · ${escapeHtml(item.status)}</small></div>`).join("");
+        if (!run) {
+          document.getElementById("mobile-surface").innerHTML = `${notifications}<div class="message"><strong>Start a Run</strong><p>Submit one constrained objective. This DM does not become an agent conversation.</p>${mobilePrompt(view.offers)}<div style="margin-top:8px">${offerButtons(view.offers, "mobile")}</div></div>`;
+          return;
+        }
+        const card = `<div class="message run-card"><small>Durable Run Card · edited at r${view.cursor}</small><h3 style="margin-top:5px">${escapeHtml(run.id)}</h3><p>${escapeHtml(run.objective)}</p><dl>
+          <dt>Status</dt><dd>${escapeHtml(run.stage)} / ${escapeHtml(run.condition)}</dd>
+          <dt>Round</dt><dd>${escapeHtml(run.reviewRound || "Not started")}</dd>
+          <dt>Target</dt><dd>${run.target ? escapeHtml(`${run.target.base} → ${run.target.head}`) : "Not sealed"}</dd>
+          <dt>Reviewer A</dt><dd>${escapeHtml(run.reports.reviewerA.status)}</dd>
+          <dt>Reviewer B</dt><dd>${escapeHtml(run.reports.reviewerB.status)}</dd>
+          <dt>Next</dt><dd>${escapeHtml(run.next)}</dd>
+          <dt>Outcome</dt><dd>${escapeHtml(run.outcome || "Not terminal")}</dd>
+        </dl>
+        ${run.waitingReason === "Final Operator Decision" ? `<div class="question"><strong>Finish on PC.</strong><br>Inspect the exact draft-PR diff, Reports, and Synthesis. Accept is intentionally unavailable in Discord.</div>` : ""}
+        ${mobilePrompt(view.offers)}
+        <div style="margin-top:8px">${offerButtons(view.offers, "mobile")}</div>
+        <p class="mobile-limit">Button payloads contain only short opaque offer locators. Discord interaction IDs identify physical attempts; Runtime Core receipts identify accepted logical actions.</p>
+        </div>`;
+        document.getElementById("mobile-surface").innerHTML = `${notifications}${card}`;
+      }
+
+      function renderControls() {
+        document.getElementById("operator-controls").innerHTML = Object.entries(RuntimeCoreModel.ACTION_LABELS).map(([kind, label]) => `<button data-free-action="${kind}">${escapeHtml(label)}</button>`).join("");
+        document.getElementById("fact-controls").innerHTML = Object.entries(RuntimeCoreModel.FACT_LABELS).map(([kind, label]) => `<button data-free-fact="${kind}">${escapeHtml(label)}</button>`).join("");
+      }
+
+      function renderLedger() {
+        const receipts = Object.values(state.receipts).slice(-8).reverse();
+        const audit = state.audit.slice(-8).reverse();
+        const effects = [state.projectionEffects.runCard, ...state.projectionEffects.attention.slice(-7)].filter(Boolean).reverse();
+        document.getElementById("ledger").innerHTML = `
+          <div class="card"><h3>Durable Operator receipts</h3><ul class="list">${receipts.length ? receipts.map(item => `<li><strong>${escapeHtml(item.status)} · ${escapeHtml(item.action)}</strong>${escapeHtml(item.requestId)} at r${item.cursor}</li>`).join("") : "<li>No accepted Operator request.</li>"}</ul></div>
+          <div class="card"><h3>Authoritative audit</h3><ul class="list">${audit.length ? audit.map(item => `<li><strong>r${item.cursor} · ${escapeHtml(item.kind)}</strong>${escapeHtml(item.summary)}<br><span class="muted">${escapeHtml(item.source)}</span></li>`).join("") : "<li>No committed transition.</li>"}</ul></div>
+          <div class="card"><h3>Discord projection effects</h3><ul class="list">${effects.length ? effects.map(item => `<li><strong>${escapeHtml(item.category || item.message)}</strong>${escapeHtml(item.effectId)}<br><span class="muted">${escapeHtml(item.status)}</span></li>`).join("") : "<li>No message effect yet.</li>"}${state.lateEvidence.map(item => `<li><strong>Late evidence</strong>${escapeHtml(item.disposition)}</li>`).join("")}</ul></div>`;
+      }
+
+      function renderScenarios() {
+        document.getElementById("scenario-tabs").innerHTML = scenarios.map((scenario, index) => `<button class="tab" role="tab" aria-selected="${index === activeScenario}" data-scenario="${index}">${escapeHtml(scenario.name)}</button>`).join("");
+        document.getElementById("scenario-description").textContent = scenarios[activeScenario].description;
+        document.getElementById("scenario-steps").innerHTML = scenarios[activeScenario].steps.map((step, index) => `<button class="step" data-step="${index}" data-done="${index < activeStep}" aria-current="${index === activeStep ? "step" : "false"}"><span class="step-number">Step ${index + 1}</span>${escapeHtml(step.label)}</button>`).join("");
+      }
+
+      function bindDynamicEvents() {
+        document.querySelectorAll("[data-action]").forEach(button => button.addEventListener("click", () => {
+          const surface = button.dataset.surface;
+          const source = surface === "mobile" ? document.getElementById("mobile-payload") : document.getElementById("pc-payload");
+          dispatchOperator(button.dataset.action, surface, source ? source.value : "");
+        }));
+        document.querySelectorAll("[data-free-action]").forEach(button => button.addEventListener("click", () => dispatchOperator(button.dataset.freeAction, "pc")));
+        document.querySelectorAll("[data-free-fact]").forEach(button => button.addEventListener("click", () => dispatchFact(button.dataset.freeFact)));
+        document.querySelectorAll("[data-scenario]").forEach(button => button.addEventListener("click", () => selectScenario(Number(button.dataset.scenario))));
+        document.querySelectorAll("[data-step]").forEach(button => button.addEventListener("click", () => runStep(Number(button.dataset.step))));
+      }
+
+      function render() {
+        renderScenarios();
+        renderState();
+        renderPc();
+        renderMobile();
+        renderControls();
+        renderLedger();
+        bindDynamicEvents();
+      }
+
+      document.getElementById("reset").addEventListener("click", reset);
+      document.getElementById("replay-request").addEventListener("click", replayLastRequest);
+      document.getElementById("stale-control").addEventListener("click", useStaleControl);
+      document.getElementById("id-collision").addEventListener("click", reuseIdWithChangedContent);
+      render();
+    })();
+  </script>
+</body>
+</html>
