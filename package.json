@@ -1,0 +1,17 @@
+{
+  "name": "openab-orchestration",
+  "version": "0.1.0",
+  "description": "Local-first coding and review orchestration for OpenAB agents",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node --check src/openab-orchestration.mjs && node --check scripts/build.mjs && node --check scripts/public-boundary-check.mjs",
+    "check:public": "node scripts/public-boundary-check.mjs --repository-root .",
+    "test": "node --test"
+  }
+}

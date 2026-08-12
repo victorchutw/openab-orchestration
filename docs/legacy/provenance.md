@@ -11,6 +11,11 @@ alternatives, and failure analysis. References to "this repository", accepted
 ADRs, a Control Repository, GitHub-owned work state, existing registries, or
 current deployments describe the legacy system and are non-normative here.
 
+The five files in this record are also explicitly outside the project's MIT
+grant while their rights remain uncleared. See
+[`LICENSE_SCOPE.md`](../../LICENSE_SCOPE.md) for the controlling license scope;
+public readability does not grant reuse permission.
+
 ## Source snapshot
 
 Tracked reports came from legacy commit

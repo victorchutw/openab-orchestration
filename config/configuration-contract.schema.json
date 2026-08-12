@@ -1,0 +1,402 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/victorchutw/openab-orchestration/blob/main/config/configuration-contract.schema.json",
+  "title": "OpenAB Installation Configuration Contract",
+  "description": "Versioned public contract for private Installation Configuration. Public synthetic documents use placeholders; private values remain outside the Product Repository. Secret Material is never configuration and workers receive only private secret references.",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "processes",
+    "storage",
+    "workspace",
+    "authority",
+    "workers"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri-reference"
+    },
+    "apiVersion": {
+      "const": "openab.dev/v1alpha1"
+    },
+    "kind": {
+      "enum": ["SyntheticInstallation", "Installation"]
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["revision"],
+      "properties": {
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Operator-controlled immutable revision identifier for this effective configuration."
+        }
+      },
+      "additionalProperties": false
+    },
+    "processes": {
+      "type": "object",
+      "required": [
+        "runtimeCore",
+        "executionWorker",
+        "githubPublisher",
+        "discordOperatorInterface"
+      ],
+      "properties": {
+        "runtimeCore": { "$ref": "#/$defs/enabledProcess" },
+        "executionWorker": { "$ref": "#/$defs/enabledProcess" },
+        "githubPublisher": { "$ref": "#/$defs/enabledProcess" },
+        "discordOperatorInterface": { "$ref": "#/$defs/enabledProcess" }
+      },
+      "additionalProperties": false
+    },
+    "storage": {
+      "type": "object",
+      "required": ["primaryRoot", "recoveryRoot"],
+      "properties": {
+        "primaryRoot": {
+          "oneOf": [
+            { "$ref": "#/$defs/placeholder" },
+            { "$ref": "#/$defs/pathBinding" }
+          ]
+        },
+        "recoveryRoot": {
+          "oneOf": [
+            { "$ref": "#/$defs/placeholder" },
+            { "$ref": "#/$defs/pathBinding" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "workspace": {
+      "type": "object",
+      "required": ["root"],
+      "properties": {
+        "root": {
+          "oneOf": [
+            { "$ref": "#/$defs/placeholder" },
+            { "$ref": "#/$defs/pathBinding" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "authority": {
+      "type": "object",
+      "required": [
+        "operatorIdentity",
+        "agentRoleIdentities",
+        "githubTarget",
+        "discordOperator"
+      ],
+      "properties": {
+        "operatorIdentity": {
+          "oneOf": [
+            { "$ref": "#/$defs/placeholder" },
+            { "$ref": "#/$defs/identityBinding" }
+          ]
+        },
+        "agentRoleIdentities": {
+          "type": "object",
+          "required": ["orchestrator", "coding", "reviewerA", "reviewerB"],
+          "properties": {
+            "orchestrator": {
+              "oneOf": [
+                { "$ref": "#/$defs/placeholder" },
+                { "$ref": "#/$defs/identityBinding" }
+              ]
+            },
+            "coding": {
+              "oneOf": [
+                { "$ref": "#/$defs/placeholder" },
+                { "$ref": "#/$defs/identityBinding" }
+              ]
+            },
+            "reviewerA": {
+              "oneOf": [
+                { "$ref": "#/$defs/placeholder" },
+                { "$ref": "#/$defs/identityBinding" }
+              ]
+            },
+            "reviewerB": {
+              "oneOf": [
+                { "$ref": "#/$defs/placeholder" },
+                { "$ref": "#/$defs/identityBinding" }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "githubTarget": {
+          "oneOf": [
+            { "$ref": "#/$defs/placeholder" },
+            { "$ref": "#/$defs/githubTargetBinding" }
+          ]
+        },
+        "discordOperator": {
+          "oneOf": [
+            { "$ref": "#/$defs/placeholder" },
+            { "$ref": "#/$defs/identityBinding" }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "policy": {
+      "type": "object",
+      "default": {
+        "reviewerDiversity": "distinct-serving-providers"
+      },
+      "properties": {
+        "reviewerDiversity": {
+          "const": "distinct-serving-providers",
+          "default": "distinct-serving-providers",
+          "description": "Fail-closed MVP default. Any same-provider exception belongs to a later explicit Operator decision, not this bootstrap configuration."
+        }
+      },
+      "additionalProperties": false
+    },
+    "workers": {
+      "type": "object",
+      "required": [
+        "executionWorker",
+        "githubPublisher",
+        "discordOperatorInterface"
+      ],
+      "properties": {
+        "executionWorker": { "$ref": "#/$defs/workerSecrets" },
+        "githubPublisher": { "$ref": "#/$defs/workerSecrets" },
+        "discordOperatorInterface": { "$ref": "#/$defs/workerSecrets" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "kind": { "const": "SyntheticInstallation" } },
+        "required": ["kind"]
+      },
+      "then": { "$ref": "#/$defs/syntheticBoundary" }
+    },
+    {
+      "if": {
+        "properties": { "kind": { "const": "Installation" } },
+        "required": ["kind"]
+      },
+      "then": { "$ref": "#/$defs/privateBoundary" }
+    }
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "enabledProcess": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "const": true }
+      },
+      "additionalProperties": false
+    },
+    "placeholder": {
+      "type": "object",
+      "required": ["placeholder"],
+      "properties": {
+        "placeholder": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A descriptive public shape, never an Installation value."
+        }
+      },
+      "additionalProperties": false
+    },
+    "pathBinding": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Existing absolute private path outside the Product Repository checkout."
+        }
+      },
+      "additionalProperties": false
+    },
+    "identityBinding": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "githubTargetBinding": {
+      "type": "object",
+      "required": ["owner", "repository"],
+      "properties": {
+        "owner": { "type": "string", "minLength": 1 },
+        "repository": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "secretReference": {
+      "type": "object",
+      "required": ["purpose", "provider", "reference", "generation"],
+      "properties": {
+        "purpose": {
+          "enum": [
+            "provider-authentication",
+            "acp-transport-authentication",
+            "github-publication-authentication",
+            "discord-bot-authentication"
+          ]
+        },
+        "provider": { "enum": ["environment", "file"] },
+        "reference": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Private worker-owned locator; never a secret payload."
+        },
+        "generation": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Non-secret generation identifier exposed to Runtime Core."
+        }
+      },
+      "additionalProperties": false
+    },
+    "placeholderSecretReference": {
+      "type": "object",
+      "required": ["purpose", "placeholder"],
+      "properties": {
+        "purpose": {
+          "enum": [
+            "provider-authentication",
+            "acp-transport-authentication",
+            "github-publication-authentication",
+            "discord-bot-authentication"
+          ]
+        },
+        "placeholder": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "workerSecrets": {
+      "type": "object",
+      "required": ["secretReferences"],
+      "properties": {
+        "secretReferences": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "oneOf": [
+              { "$ref": "#/$defs/secretReference" },
+              { "$ref": "#/$defs/placeholderSecretReference" }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "syntheticBoundary": {
+      "type": "object",
+      "properties": {
+        "storage": {
+          "properties": {
+            "primaryRoot": { "$ref": "#/$defs/placeholder" },
+            "recoveryRoot": { "$ref": "#/$defs/placeholder" }
+          }
+        },
+        "workspace": {
+          "properties": { "root": { "$ref": "#/$defs/placeholder" } }
+        },
+        "authority": {
+          "properties": {
+            "operatorIdentity": { "$ref": "#/$defs/placeholder" },
+            "agentRoleIdentities": {
+              "properties": {
+                "orchestrator": { "$ref": "#/$defs/placeholder" },
+                "coding": { "$ref": "#/$defs/placeholder" },
+                "reviewerA": { "$ref": "#/$defs/placeholder" },
+                "reviewerB": { "$ref": "#/$defs/placeholder" }
+              }
+            },
+            "githubTarget": { "$ref": "#/$defs/placeholder" },
+            "discordOperator": { "$ref": "#/$defs/placeholder" }
+          }
+        },
+        "workers": {
+          "properties": {
+            "executionWorker": {
+              "$ref": "#/$defs/syntheticWorkerSecrets"
+            },
+            "githubPublisher": {
+              "$ref": "#/$defs/syntheticWorkerSecrets"
+            },
+            "discordOperatorInterface": {
+              "$ref": "#/$defs/syntheticWorkerSecrets"
+            }
+          }
+        }
+      }
+    },
+    "privateBoundary": {
+      "type": "object",
+      "properties": {
+        "storage": {
+          "properties": {
+            "primaryRoot": { "$ref": "#/$defs/pathBinding" },
+            "recoveryRoot": { "$ref": "#/$defs/pathBinding" }
+          }
+        },
+        "workspace": {
+          "properties": { "root": { "$ref": "#/$defs/pathBinding" } }
+        },
+        "authority": {
+          "properties": {
+            "operatorIdentity": { "$ref": "#/$defs/identityBinding" },
+            "agentRoleIdentities": {
+              "properties": {
+                "orchestrator": { "$ref": "#/$defs/identityBinding" },
+                "coding": { "$ref": "#/$defs/identityBinding" },
+                "reviewerA": { "$ref": "#/$defs/identityBinding" },
+                "reviewerB": { "$ref": "#/$defs/identityBinding" }
+              }
+            },
+            "githubTarget": { "$ref": "#/$defs/githubTargetBinding" },
+            "discordOperator": { "$ref": "#/$defs/identityBinding" }
+          }
+        },
+        "workers": {
+          "properties": {
+            "executionWorker": { "$ref": "#/$defs/privateWorkerSecrets" },
+            "githubPublisher": { "$ref": "#/$defs/privateWorkerSecrets" },
+            "discordOperatorInterface": {
+              "$ref": "#/$defs/privateWorkerSecrets"
+            }
+          }
+        }
+      }
+    },
+    "syntheticWorkerSecrets": {
+      "type": "object",
+      "properties": {
+        "secretReferences": {
+          "items": { "$ref": "#/$defs/placeholderSecretReference" }
+        }
+      }
+    },
+    "privateWorkerSecrets": {
+      "type": "object",
+      "properties": {
+        "secretReferences": {
+          "items": { "$ref": "#/$defs/secretReference" }
+        }
+      }
+    }
+  }
+}
