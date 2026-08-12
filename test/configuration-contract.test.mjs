@@ -26,6 +26,20 @@ test("the public Configuration Contract is versioned and fail-closed", () => {
     "distinct-serving-providers",
   );
   assert.equal(contract.$defs.secretReference.additionalProperties, false);
+  assert.deepEqual(
+    contract.$defs.secretReference.allOf.map(
+      (rule) => rule.if.properties.provider.const,
+    ),
+    ["environment", "file"],
+  );
+  assert.equal(
+    contract.$defs.secretReference.allOf[0].then.properties.reference.pattern,
+    "^[A-Z_][A-Z0-9_]*$",
+  );
+  assert.equal(
+    contract.$defs.secretReference.allOf[1].then.properties.reference.pattern,
+    "^/",
+  );
   assert.equal(contract.$defs.placeholder.additionalProperties, false);
   assert.match(contract.description, /private Installation/i);
   assert.match(contract.description, /Secret Material/i);

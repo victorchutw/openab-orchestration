@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const artifact = resolve(
-  repositoryRoot,
-  "dist/openab-orchestration-v0.1.0.mjs",
+const { version } = JSON.parse(
+  readFileSync(resolve(repositoryRoot, "package.json"), "utf8"),
 );
+const artifact = resolve(repositoryRoot, `dist/openab-orchestration-v${version}.mjs`);
 
 test("a clean checkout builds one executable versioned product artifact", () => {
   execFileSync(process.execPath, ["scripts/build.mjs"], {
@@ -22,7 +22,7 @@ test("a clean checkout builds one executable versioned product artifact", () => 
     JSON.parse(execFileSync(artifact, ["version"], { encoding: "utf8" })),
     {
       name: "openab-orchestration",
-      version: "0.1.0",
+      version,
     },
   );
   assert.deepEqual(

@@ -274,6 +274,32 @@ test("preflight rejects Secret Material supplied as configuration", () => {
   }
 });
 
+test("preflight accepts only provider-specific secret reference shapes", () => {
+  const root = mkdtempSync(join(tmpdir(), "openab-preflight-"));
+  try {
+    for (const name of ["primary", "recovery", "workspaces"]) {
+      mkdirSync(join(root, name));
+    }
+    const configuration = privateInstallation(root);
+    configuration.workers.executionWorker.secretReferences[0].reference =
+      "payload-that-is-not-an-environment-variable-name";
+    const configPath = join(root, "installation.json");
+    writeFileSync(configPath, JSON.stringify(configuration));
+
+    const result = invoke([
+      "preflight",
+      "--config",
+      configPath,
+      "--product-root",
+      repositoryRoot,
+    ]);
+    assert.equal(result.exitCode, 2);
+    assert.equal(JSON.parse(result.stderr).error.code, "SECRET_PAYLOAD_FORBIDDEN");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("preflight rejects incomplete authority-sensitive configuration", () => {
   const root = mkdtempSync(join(tmpdir(), "openab-preflight-"));
   try {
@@ -388,5 +414,25 @@ test("preflight rejects private Installation Configuration inside the checkout",
   } finally {
     rmSync(privateRoot, { recursive: true, force: true });
     rmSync(configDirectory, { recursive: true, force: true });
+  }
+});
+
+test("preflight refuses a product root that is not this Product Repository", () => {
+  const falseProductRoot = mkdtempSync(join(tmpdir(), "openab-false-product-"));
+  try {
+    const result = invoke([
+      "preflight",
+      "--config",
+      resolve(repositoryRoot, "config/examples/synthetic-installation.json"),
+      "--product-root",
+      falseProductRoot,
+    ]);
+    assert.equal(result.exitCode, 2);
+    assert.equal(
+      JSON.parse(result.stderr).error.code,
+      "PRODUCT_ROOT_MISMATCH",
+    );
+  } finally {
+    rmSync(falseProductRoot, { recursive: true, force: true });
   }
 });
