@@ -3,14 +3,17 @@ import {
   randomUUID as runtimeRandomUUID,
 } from "node:crypto";
 
-import { authorizeOperatorRequest, createInitialOffer, operatorRequestDigest, projectOperatorReply, proposeOperatorAction } from "./core-model.mjs";
+import { requireNonEmptyString } from "./canonical.mjs";
+import {
+  authorizeOperatorRequest,
+  createInitialOffer,
+  createRejectionReceipt,
+  operatorRequestContent,
+  operatorRequestDigest,
+  projectOperatorReply,
+  proposeOperatorAction,
+} from "./core-model.mjs";
 import { openDurability } from "./durability.mjs";
-
-function runtimeRequireNonEmptyString(value, field) {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new TypeError(`${field} must be a non-empty string`);
-  }
-}
 
 function runtimeNormalizeOptions(options) {
   for (const field of [
@@ -20,7 +23,7 @@ function runtimeNormalizeOptions(options) {
     "configurationRevision",
     "effectiveConfigurationDigest",
   ]) {
-    runtimeRequireNonEmptyString(options?.[field], field);
+    requireNonEmptyString(options?.[field], field);
   }
   const identifiers = {
     offer:
@@ -48,12 +51,12 @@ function runtimeNormalizeOptions(options) {
   };
 }
 
-function runtimeRejectedReply(durability, request, rejection) {
+function runtimeRejectedReply(durability, request, rejection, receipt) {
   return projectOperatorReply(
     durability.inspect(),
     request.principal,
     request.locale,
-    { status: "rejected", rejection },
+    { status: "rejected", rejection, receipt },
   );
 }
 
@@ -84,13 +87,33 @@ export function openRuntimeCore(rawOptions) {
       }
 
       const contentDigest = operatorRequestDigest(request);
-      const prior = durability.receipt(request.requestId);
+      const prior = durability.receipt(request.requestId, contentDigest);
       if (prior !== null) {
-        if (prior.requestDigest !== contentDigest) {
-          return runtimeRejectedReply(durability, request, {
+        if (prior.conflictWithDigest !== undefined) {
+          const rejection = {
             code: "RequestIdConflict",
             message: "requestId was already used with different content",
+          };
+          const state = durability.inspect();
+          const receipt = createRejectionReceipt(
+            state,
+            request,
+            rejection,
+            options.clock(),
+          );
+          const durableReceipt = durability.reject({
+            requestId: request.requestId,
+            requestDigest: contentDigest,
+            requestContent: operatorRequestContent(request),
+            conflictWithDigest: prior.conflictWithDigest,
+            receipt,
           });
+          return runtimeRejectedReply(
+            durability,
+            request,
+            rejection,
+            durableReceipt,
+          );
         }
         return projectOperatorReply(
           durability.inspect(),
@@ -107,7 +130,25 @@ export function openRuntimeCore(rawOptions) {
         effectIntentId: options.identifiers.effectIntent(),
       });
       if (proposed.rejection !== undefined) {
-        return runtimeRejectedReply(durability, request, proposed.rejection);
+        const state = durability.inspect();
+        const receipt = createRejectionReceipt(
+          state,
+          request,
+          proposed.rejection,
+          options.clock(),
+        );
+        const durableReceipt = durability.reject({
+          requestId: request.requestId,
+          requestDigest: contentDigest,
+          requestContent: operatorRequestContent(request),
+          receipt,
+        });
+        return runtimeRejectedReply(
+          durability,
+          request,
+          proposed.rejection,
+          durableReceipt,
+        );
       }
       const receipt = durability.commit(proposed.candidate);
       return projectOperatorReply(

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -12,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
 
 import { openRuntimeCore } from "../src/runtime-core.mjs";
 
@@ -61,6 +63,62 @@ function withRuntimeCore(testBody) {
   });
 }
 
+function canonicalize(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonicalize);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalize(value[key])]),
+    );
+  }
+  return value;
+}
+
+function capsuleDigest(capsule) {
+  const { capsuleDigest: ignored, ...body } = capsule;
+  return `sha256:${createHash("sha256")
+    .update(JSON.stringify(canonicalize(body)))
+    .digest("hex")}`;
+}
+
+async function withAcceptedStorage(testBody) {
+  const root = mkdtempSync(join(tmpdir(), "openab-runtime-integrity-"));
+  const primaryRoot = join(root, "primary");
+  const recoveryRoot = join(root, "recovery");
+  mkdirSync(primaryRoot);
+  mkdirSync(recoveryRoot);
+  const options = runtimeCoreOptions(primaryRoot, recoveryRoot);
+  let core = openRuntimeCore(options);
+
+  try {
+    const initial = await core.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    const accepted = await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:test-1",
+      offer: initial.offers[0].offer,
+      action: {
+        kind: "SubmitObjective",
+        payload: { objective: "Protect the authoritative projection" },
+      },
+    });
+    core.close();
+    core = undefined;
+    await testBody({ options, primaryRoot, recoveryRoot, accepted });
+  } finally {
+    core?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 test("Observe localizes copy without changing the offered Operator Action", () =>
   withRuntimeCore(async ({ core }) => {
     const en = await core.operator({
@@ -80,6 +138,7 @@ test("Observe localizes copy without changing the offered Operator Action", () =
       view: {
         locale: "en",
         run: null,
+        latestReceipt: null,
         copy: {
           status: "No active Run",
           nextAction: "Submit an objective",
@@ -152,6 +211,7 @@ test("Act durably creates one Planning Run before acknowledging it", () =>
       view: {
         locale: "en",
         run,
+        latestReceipt: receipt,
         copy: {
           status: "Run is active in Planning",
           nextAction: "Await the Orchestrator Agent's Run Plan",
@@ -202,6 +262,7 @@ test("exact replay returns the original receipt without another transition", () 
     assert.deepEqual(duplicate.receipt, accepted.receipt);
     assert.deepEqual(duplicate.cursor, accepted.cursor);
     assert.deepEqual(duplicate.view.run, accepted.view.run);
+    assert.deepEqual(duplicate.view.latestReceipt, accepted.receipt);
     assert.equal(duplicate.view.locale, "zh-TW");
     assert.deepEqual(duplicate.view.copy, {
       status: "Run 正在 Planning 階段進行",
@@ -211,7 +272,7 @@ test("exact replay returns the original receipt without another transition", () 
   }));
 
 test("conflicting request IDs and stale or mismatched offers do not commit", () =>
-  withRuntimeCore(async ({ core }) => {
+  withRuntimeCore(async ({ core, reopen }) => {
     const observed = await core.operator({
       kind: "Observe",
       principal: OPERATOR_ID,
@@ -229,7 +290,7 @@ test("conflicting request IDs and stale or mismatched offers do not commit", () 
       },
     });
 
-    const conflict = await core.operator({
+    const conflictingRequest = {
       kind: "Act",
       principal: OPERATOR_ID,
       locale: "en",
@@ -239,7 +300,8 @@ test("conflicting request IDs and stale or mismatched offers do not commit", () 
         kind: "SubmitObjective",
         payload: { objective: "Different content" },
       },
-    });
+    };
+    const conflict = await core.operator(conflictingRequest);
     assert.equal(conflict.status, "rejected");
     assert.equal(conflict.rejection.code, "RequestIdConflict");
     assert.deepEqual(conflict.cursor, accepted.cursor);
@@ -282,6 +344,12 @@ test("conflicting request IDs and stale or mismatched offers do not commit", () 
     assert.deepEqual(finalView.cursor, accepted.cursor);
     assert.deepEqual(finalView.view.run, accepted.view.run);
     assert.deepEqual(finalView.offers, []);
+
+    const restarted = reopen();
+    const replayedConflict = await restarted.operator(conflictingRequest);
+    assert.equal(replayedConflict.status, "duplicate");
+    assert.deepEqual(replayedConflict.receipt, conflict.receipt);
+    assert.deepEqual(replayedConflict.cursor, accepted.cursor);
   }));
 
 test("restart completes the one recovery-first capsule that SQLite has not committed", async () => {
@@ -333,6 +401,7 @@ test("restart completes the one recovery-first capsule that SQLite has not commi
     });
     assert.deepEqual(recovered.cursor, accepted.cursor);
     assert.deepEqual(recovered.view.run, accepted.view.run);
+    assert.deepEqual(recovered.view.latestReceipt, accepted.receipt);
     assert.deepEqual(recovered.offers, []);
   } finally {
     core?.close();
@@ -374,3 +443,153 @@ test("restart rejects an authoritative commit whose recovery capsule was changed
       /recovery capsule digest does not verify/,
     );
   }));
+
+test("a rejected Act has a durable receipt that exact replay can recover", () =>
+  withRuntimeCore(async ({ core, reopen }) => {
+    const rejectedRequest = {
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:rejected-1",
+      offer: "offer:from-another-runtime-core",
+      action: {
+        kind: "SubmitObjective",
+        payload: { objective: "Do not accept this objective" },
+      },
+    };
+    const rejected = await core.operator(rejectedRequest);
+
+    assert.equal(rejected.status, "rejected");
+    assert.deepEqual(rejected.receipt, {
+      status: "rejected",
+      requestId: "request:rejected-1",
+      actionKind: "SubmitObjective",
+      cursor: { revision: 0, commitId: "GENESIS" },
+      rejection: rejected.rejection,
+      rejectedAt: "2026-08-13T00:00:00.000Z",
+    });
+    assert.deepEqual(rejected.cursor, { revision: 0, commitId: "GENESIS" });
+
+    const restarted = reopen();
+    const replayed = await restarted.operator({
+      ...rejectedRequest,
+      locale: "zh-TW",
+    });
+    assert.equal(replayed.status, "duplicate");
+    assert.deepEqual(replayed.receipt, rejected.receipt);
+    assert.deepEqual(replayed.cursor, rejected.cursor);
+    assert.equal(replayed.view.locale, "zh-TW");
+  }));
+
+test("restart rejects a changed authoritative SQLite Run projection", () =>
+  withAcceptedStorage(({ options, primaryRoot }) => {
+    const database = new DatabaseSync(
+      join(primaryRoot, "runtime-core.sqlite3"),
+    );
+    const projection = database
+      .prepare("SELECT run_json FROM current_projection WHERE singleton = 1")
+      .get();
+    const changedRun = JSON.parse(projection.run_json);
+    changedRun.objective = "A changed projection";
+    database
+      .prepare(
+        "UPDATE current_projection SET run_json = ? WHERE singleton = 1",
+      )
+      .run(JSON.stringify(changedRun));
+    database.close();
+
+    assert.throws(
+      () => openRuntimeCore(options),
+      /authoritative current projection differs from its capsule/,
+    );
+  }));
+
+test("restart validates capsule mutations against the original Act payload", () =>
+  withAcceptedStorage(({ options, recoveryRoot }) => {
+    const commitsDirectory = join(recoveryRoot, "commits");
+    const [capsuleName] = readdirSync(commitsDirectory);
+    const capsulePath = join(commitsDirectory, capsuleName);
+    const capsule = JSON.parse(readFileSync(capsulePath, "utf8"));
+    capsule.mutations.run.objective = "A different capsule objective";
+    capsule.capsuleDigest = capsuleDigest(capsule);
+    chmodSync(capsulePath, 0o600);
+    writeFileSync(capsulePath, JSON.stringify(capsule));
+
+    assert.throws(
+      () => openRuntimeCore(options),
+      /capsule mutations do not match the original request payload/,
+    );
+  }));
+
+test("a failed SQLite apply leaves at most one prepared recovery revision", async () => {
+  const root = mkdtempSync(join(tmpdir(), "openab-runtime-prepared-"));
+  const primaryRoot = join(root, "primary");
+  const recoveryRoot = join(root, "recovery");
+  mkdirSync(primaryRoot);
+  mkdirSync(recoveryRoot);
+  let sequence = 0;
+  const options = {
+    ...runtimeCoreOptions(primaryRoot, recoveryRoot),
+    identifiers: {
+      offer: () => "offer:prepared-test",
+      run: () => `run:prepared-${(sequence += 1)}`,
+      commit: () => `commit:prepared-${sequence}`,
+      effectIntent: () => `effect-intent:prepared-${sequence}`,
+    },
+  };
+  const core = openRuntimeCore(options);
+
+  try {
+    const observed = await core.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    const database = new DatabaseSync(
+      join(primaryRoot, "runtime-core.sqlite3"),
+    );
+    database
+      .prepare(
+        `INSERT INTO runs
+           (run_id, objective, stage, condition, review_round, outcome,
+            created_at, created_revision)
+         VALUES ('run:prepared-1', 'fault setup', 'Planning', 'Active',
+                 NULL, NULL, '2026-08-13T00:00:00.000Z', 99)`,
+      )
+      .run();
+    database.close();
+
+    await assert.rejects(
+      core.operator({
+        kind: "Act",
+        principal: OPERATOR_ID,
+        locale: "en",
+        requestId: "request:prepared-1",
+        offer: observed.offers[0].offer,
+        action: {
+          kind: "SubmitObjective",
+          payload: { objective: "Prepare the first capsule" },
+        },
+      }),
+      /UNIQUE constraint failed: runs.run_id/,
+    );
+    await assert.rejects(
+      core.operator({
+        kind: "Act",
+        principal: OPERATOR_ID,
+        locale: "en",
+        requestId: "request:prepared-2",
+        offer: observed.offers[0].offer,
+        action: {
+          kind: "SubmitObjective",
+          payload: { objective: "Do not prepare another capsule" },
+        },
+      }),
+      /prepared recovery capsule must be completed before another request/,
+    );
+    assert.equal(readdirSync(join(recoveryRoot, "commits")).length, 1);
+  } finally {
+    core.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

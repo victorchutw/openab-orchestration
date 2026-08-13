@@ -41,10 +41,10 @@ not be copied into the checkout or an issue.
 ## Observe
 
 `Observe` returns a monotonic `{ revision, commitId }` cursor, the current Run
-projection, and the Operator Actions legal at that cursor. With no
-non-terminal Run, exactly one opaque `SubmitObjective` offer is returned. The
-offer is bound to the authenticated Operator, current revision, action kind,
-and objective constraints. Callers treat its value as opaque.
+projection, the latest accepted receipt, and the Operator Actions legal at that
+cursor. With no non-terminal Run, exactly one opaque `SubmitObjective` offer is
+returned. The offer is bound to the authenticated Operator, current revision,
+action kind, and objective constraints. Callers treat its value as opaque.
 
 The supported locales are `en` and `zh-TW`. Locale changes presentation copy
 only. Run values, action kinds, offer values, constraints, cursors, and
@@ -65,6 +65,11 @@ returned only after the capsule and SQLite identity verify. Authority is read
 from the current projection; it is not reconstructed solely by replaying the
 audit history.
 
+SQLite writer serialization begins before checking or publishing a prepared
+capsule. At most one next revision may remain prepared for an Installation. A
+different request cannot publish another capsule until the prepared request is
+completed or the Runtime Core enters explicit recovery.
+
 Restart verifies the authoritative head against recovery storage. If the one
 next capsule is durable but its matching SQLite transaction was interrupted,
 restart verifies and completes that same Commit ID before exposing the Run. A
@@ -79,8 +84,13 @@ It does not create another revision, Run, or Effect Intent.
 
 Reusing a request ID with different content returns `RequestIdConflict`.
 Consumed capabilities return `StaleOffer`; unknown or incorrectly bound
-capabilities return `MismatchedOffer`. Rejections expose the unchanged cursor.
-No second objective is offered while the first Run remains non-terminal.
+capabilities return `MismatchedOffer`. Rejections expose the unchanged cursor
+and a durable receipt. The Runtime Core persists and verifies an immutable
+recovery receipt capsule before recording that receipt in SQLite. Exact replay
+of rejected content returns the original rejection receipt across restart; a
+request-ID conflict is retained separately without replacing the first final
+disposition. No second objective is offered while the first Run remains
+non-terminal.
 
 Call `core.close()` during orderly process shutdown. An Operator Interface may
 cache a projection for presentation, but the cache, transport history, and
