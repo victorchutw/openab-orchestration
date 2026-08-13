@@ -48,7 +48,7 @@ npm run build
 npm test
 ```
 
-The product uses Node.js 22 or newer and has no runtime package dependencies.
+The product uses Node.js 22.13 or newer and has no runtime package dependencies.
 
 ## Public exposure review
 

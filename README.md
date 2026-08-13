@@ -5,8 +5,8 @@ independent, unofficial OpenAB integration and is not endorsed by the upstream
 OpenAB project.
 
 The planning destination is complete and greenfield implementation has begun.
-The current bootstrap provides a buildable, versioned product entry point and a
-fail-closed Installation preflight before any Runtime Core or worker starts.
+The product provides a buildable, versioned entry point, a fail-closed
+Installation preflight, and the first durable Runtime Core Operator transition.
 The complete MVP remains one coding and review loop:
 
 ```text
@@ -40,8 +40,10 @@ source control, not the operational source of truth.
 
 ## Status
 
-- Bootstrap implementation only; the Runtime Core and adapters are not yet
-  implemented and no production deployment is supported.
+- Runtime Core currently supports observing, durably creating, restarting, and
+  exactly replaying the first Planning / Active Run. Later lifecycle
+  transitions and adapters are not yet implemented, and no production
+  deployment is supported.
 - One Orchestrator Agent, one Coding Agent, and two decision-isolated Reviewer
   Agents are in the MVP destination.
 - One bounded remediation round is allowed before returning to the Operator.
@@ -52,8 +54,9 @@ source control, not the operational source of truth.
 
 ## Build and preflight
 
-Node.js 22 or newer is required. The product has no runtime package
-dependencies.
+Node.js 22.13 or newer is required. The product has no runtime package
+dependencies; 22.13 is the first Node.js 22 release that exposes the built-in
+SQLite API without a command-line flag.
 
 ```bash
 npm run check
@@ -79,6 +82,7 @@ Configuration.
 - [Issue tracker operations](./docs/agents/issue-tracker.md)
 - [Configuration Contract](./config/configuration-contract.schema.json)
 - [Synthetic Installation](./config/examples/synthetic-installation.json)
+- [Runtime Core Operator objective](./docs/operators/runtime-core.md)
 - [License scope](./LICENSE_SCOPE.md)
 - [Contribution guide](./CONTRIBUTING.md)
 - [Security policy](./SECURITY.md)

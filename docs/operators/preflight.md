@@ -5,7 +5,7 @@ starts. It is deliberately local-only: it reads one JSON document and local
 filesystem metadata, produces a non-secret Runtime Core projection, and makes no
 network or provider calls.
 
-The supported bootstrap requires Node.js 22 or newer on Linux. Build one
+The supported bootstrap requires Node.js 22.13 or newer on Linux. Build one
 versioned artifact from a clean checkout:
 
 ```bash
