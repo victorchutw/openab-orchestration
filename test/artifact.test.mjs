@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const { version } = JSON.parse(
@@ -11,7 +11,7 @@ const { version } = JSON.parse(
 );
 const artifact = resolve(repositoryRoot, `dist/openab-orchestration-v${version}.mjs`);
 
-test("a clean checkout builds one executable versioned product artifact", () => {
+test("a clean checkout builds one executable versioned product artifact", async () => {
   execFileSync(process.execPath, ["scripts/build.mjs"], {
     cwd: repositoryRoot,
     stdio: "pipe",
@@ -36,4 +36,8 @@ test("a clean checkout builds one executable versioned product artifact", () => 
       "discord-operator-interface",
     ],
   );
+  const productModule = await import(
+    `${pathToFileURL(artifact).href}?test=${Date.now()}`
+  );
+  assert.equal(typeof productModule.openRuntimeCore, "function");
 });

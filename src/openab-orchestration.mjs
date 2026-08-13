@@ -5,6 +5,8 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+export { openRuntimeCore } from "./runtime-core.mjs";
+
 const PRODUCT_ROOT = realpathSync(
   resolve(fileURLToPath(new URL("..", import.meta.url))),
 );
