@@ -115,54 +115,55 @@ export function openRuntimeCore(rawOptions) {
         );
       }
 
-      durability.recover();
-      const contentDigest = operatorRequestDigest(request);
-      const prior = durability.receipt(request.requestId, contentDigest);
-      if (prior !== null) {
-        if (prior.conflictWithDigest !== undefined) {
-          const rejection = {
-            code: "RequestIdConflict",
-            message: "requestId was already used with different content",
-          };
+      return durability.act((transaction) => {
+        const contentDigest = operatorRequestDigest(request);
+        const prior = transaction.receipt(request.requestId, contentDigest);
+        if (prior !== null) {
+          if (prior.conflictWithDigest !== undefined) {
+            const rejection = {
+              code: "RequestIdConflict",
+              message: "requestId was already used with different content",
+            };
+            return runtimeDurablyReject(
+              transaction,
+              options,
+              request,
+              contentDigest,
+              rejection,
+              prior.conflictWithDigest,
+            );
+          }
+          return projectOperatorReply(
+            transaction.inspect(),
+            request.principal,
+            request.locale,
+            { status: "duplicate", receipt: prior.receipt },
+          );
+        }
+
+        const proposed = proposeOperatorAction(transaction.inspect(), request, {
+          acceptedAt: options.clock(),
+          runId: options.identifiers.run(),
+          commitId: options.identifiers.commit(),
+          effectIntentId: options.identifiers.effectIntent(),
+        });
+        if (proposed.rejection !== undefined) {
           return runtimeDurablyReject(
-            durability,
+            transaction,
             options,
             request,
             contentDigest,
-            rejection,
-            prior.conflictWithDigest,
+            proposed.rejection,
           );
         }
+        const receipt = transaction.commit(proposed.candidate);
         return projectOperatorReply(
-          durability.inspect(),
+          transaction.inspect(),
           request.principal,
           request.locale,
-          { status: "duplicate", receipt: prior.receipt },
+          { status: "accepted", receipt },
         );
-      }
-
-      const proposed = proposeOperatorAction(durability.inspect(), request, {
-        acceptedAt: options.clock(),
-        runId: options.identifiers.run(),
-        commitId: options.identifiers.commit(),
-        effectIntentId: options.identifiers.effectIntent(),
       });
-      if (proposed.rejection !== undefined) {
-        return runtimeDurablyReject(
-          durability,
-          options,
-          request,
-          contentDigest,
-          proposed.rejection,
-        );
-      }
-      const receipt = durability.commit(proposed.candidate);
-      return projectOperatorReply(
-        durability.inspect(),
-        request.principal,
-        request.locale,
-        { status: "accepted", receipt },
-      );
     },
 
     close() {

@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 
 import { openRuntimeCore } from "../src/runtime-core.mjs";
 
@@ -633,6 +634,108 @@ test("a later Act recovers one prepared revision before disposition", async () =
     });
   } finally {
     core.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent Acts serialize recovery and disposition", async () => {
+  const root = mkdtempSync(join(tmpdir(), "openab-runtime-contenders-"));
+  const primaryRoot = join(root, "primary");
+  const recoveryRoot = join(root, "recovery");
+  mkdirSync(primaryRoot);
+  mkdirSync(recoveryRoot);
+  const signal = new Int32Array(new SharedArrayBuffer(4));
+  const options = {
+    ...runtimeCoreOptions(primaryRoot, recoveryRoot),
+    identifiers: {
+      offer: () => "offer:contended",
+      run: () => {
+        Atomics.store(signal, 0, 1);
+        Atomics.notify(signal, 0);
+        Atomics.wait(signal, 0, 1, 250);
+        return "run:contender-b";
+      },
+      commit: () => "commit:contender-b",
+      effectIntent: () => "effect-intent:contender-b",
+    },
+  };
+  const core = openRuntimeCore(options);
+  let worker;
+
+  try {
+    const observed = await core.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    const database = new DatabaseSync(
+      join(primaryRoot, "runtime-core.sqlite3"),
+    );
+    database
+      .prepare(
+        `INSERT INTO runs
+           (run_id, objective, stage, condition, review_round, outcome,
+            created_at, created_revision)
+         VALUES ('run:contender-a', 'fault setup', 'Planning', 'Active',
+                 NULL, NULL, '2026-08-13T00:00:00.000Z', 99)`,
+      )
+      .run();
+    database.close();
+
+    worker = new Worker(
+      new URL("../test-support/runtime-core-contender.mjs", import.meta.url),
+      {
+        workerData: {
+          primaryRoot,
+          recoveryRoot,
+          signal: signal.buffer,
+          request: {
+            kind: "Act",
+            principal: OPERATOR_ID,
+            locale: "en",
+            requestId: "request:contender-a",
+            offer: observed.offers[0].offer,
+            action: {
+              kind: "SubmitObjective",
+              payload: { objective: "Objective from contender A" },
+            },
+          },
+        },
+      },
+    );
+    const ready = new Promise((resolve, reject) => {
+      worker.once("error", reject);
+      worker.once("message", resolve);
+    });
+    assert.deepEqual(await ready, { type: "ready" });
+    const contenderResult = new Promise((resolve, reject) => {
+      worker.once("error", reject);
+      worker.once("message", resolve);
+    });
+
+    const accepted = await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:contender-b",
+      offer: observed.offers[0].offer,
+      action: {
+        kind: "SubmitObjective",
+        payload: { objective: "Objective from contender B" },
+      },
+    });
+    assert.equal(accepted.status, "accepted");
+    assert.equal(accepted.receipt.commitId, "commit:contender-b");
+
+    const contender = await contenderResult;
+    assert.equal(contender.type, "result");
+    assert.equal(contender.reply.status, "rejected");
+    assert.equal(contender.reply.rejection.code, "StaleOffer");
+    assert.deepEqual(contender.reply.cursor, accepted.cursor);
+    assert.equal(readdirSync(join(recoveryRoot, "commits")).length, 1);
+  } finally {
+    core.close();
+    await worker?.terminate();
     rmSync(root, { recursive: true, force: true });
   }
 });
