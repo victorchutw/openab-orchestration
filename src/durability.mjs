@@ -163,6 +163,25 @@ function durabilityOpenDatabase(primaryRoot) {
   return database;
 }
 
+function durabilityUseWriterTransaction(
+  database,
+  transactionOpen,
+  operation,
+) {
+  if (transactionOpen) {
+    return operation();
+  }
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const result = operation();
+    database.exec("COMMIT");
+    return result;
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function durabilityReadMetadata(database) {
   return Object.fromEntries(
     database.prepare("SELECT key, value FROM metadata").all().map((row) => [
@@ -454,65 +473,64 @@ function durabilityApplyReceiptCapsule(
   capsule,
   transactionOpen = false,
 ) {
-  durabilityVerifyReceiptCapsule(capsule);
-  const authoritativeRequest = database
-    .prepare(
-      `SELECT request_digest, disposition, receipt_json,
-              receipt_capsule_digest
-       FROM request_receipts WHERE request_id = ?`,
-    )
-    .get(capsule.request.id);
-  const isConflict = capsule.conflictWithDigest !== null;
-  if (isConflict) {
-    if (
-      authoritativeRequest === undefined ||
-      authoritativeRequest.request_digest !== capsule.conflictWithDigest ||
-      authoritativeRequest.request_digest === capsule.request.digest
-    ) {
-      throw new Error("request conflict receipt has no durable original request");
-    }
-    const existingConflict = database
+  return durabilityUseWriterTransaction(database, transactionOpen, () => {
+    durabilityVerifyReceiptCapsule(capsule);
+    const authoritativeRequest = database
       .prepare(
-        `SELECT receipt_json, receipt_capsule_digest
-         FROM request_conflict_receipts
-         WHERE request_id = ? AND request_digest = ?`,
+        `SELECT request_digest, disposition, receipt_json,
+                receipt_capsule_digest
+         FROM request_receipts WHERE request_id = ?`,
       )
-      .get(capsule.request.id, capsule.request.digest);
-    if (existingConflict !== undefined) {
+      .get(capsule.request.id);
+    const isConflict = capsule.conflictWithDigest !== null;
+    if (isConflict) {
       if (
-        existingConflict.receipt_json !== canonicalJson(capsule.receipt) ||
-        existingConflict.receipt_capsule_digest !== capsule.capsuleDigest
+        authoritativeRequest === undefined ||
+        authoritativeRequest.request_digest !== capsule.conflictWithDigest ||
+        authoritativeRequest.request_digest === capsule.request.digest
       ) {
-        throw new Error("durable request conflict differs from its capsule");
+        throw new Error(
+          "request conflict receipt has no durable original request",
+        );
+      }
+      const existingConflict = database
+        .prepare(
+          `SELECT receipt_json, receipt_capsule_digest
+           FROM request_conflict_receipts
+           WHERE request_id = ? AND request_digest = ?`,
+        )
+        .get(capsule.request.id, capsule.request.digest);
+      if (existingConflict !== undefined) {
+        if (
+          existingConflict.receipt_json !== canonicalJson(capsule.receipt) ||
+          existingConflict.receipt_capsule_digest !== capsule.capsuleDigest
+        ) {
+          throw new Error("durable request conflict differs from its capsule");
+        }
+        return;
+      }
+    } else if (authoritativeRequest !== undefined) {
+      if (
+        authoritativeRequest.request_digest !== capsule.request.digest ||
+        authoritativeRequest.disposition !== "rejected" ||
+        authoritativeRequest.receipt_json !== canonicalJson(capsule.receipt) ||
+        authoritativeRequest.receipt_capsule_digest !== capsule.capsuleDigest
+      ) {
+        throw new Error("durable rejection receipt differs from its capsule");
       }
       return;
     }
-  } else if (authoritativeRequest !== undefined) {
+    const metadata = durabilityReadMetadata(database);
     if (
-      authoritativeRequest.request_digest !== capsule.request.digest ||
-      authoritativeRequest.disposition !== "rejected" ||
-      authoritativeRequest.receipt_json !== canonicalJson(capsule.receipt) ||
-      authoritativeRequest.receipt_capsule_digest !== capsule.capsuleDigest
+      Number(metadata.authorityEpoch) !== capsule.authorityEpoch ||
+      Number(metadata.schemaVersion) !== capsule.schemaVersion ||
+      metadata.configurationRevision !== capsule.configuration.revision ||
+      metadata.effectiveConfigurationDigest !== capsule.configuration.digest
     ) {
-      throw new Error("durable rejection receipt differs from its capsule");
+      throw new Error("rejection receipt authority or configuration is stale");
     }
-    return;
-  }
-  const metadata = durabilityReadMetadata(database);
-  if (
-    Number(metadata.authorityEpoch) !== capsule.authorityEpoch ||
-    Number(metadata.schemaVersion) !== capsule.schemaVersion ||
-    metadata.configurationRevision !== capsule.configuration.revision ||
-    metadata.effectiveConfigurationDigest !== capsule.configuration.digest
-  ) {
-    throw new Error("rejection receipt authority or configuration is stale");
-  }
-  durabilityVerifyReceiptCursor(database, capsule.cursor);
+    durabilityVerifyReceiptCursor(database, capsule.cursor);
 
-  if (!transactionOpen) {
-    database.exec("BEGIN IMMEDIATE");
-  }
-  try {
     if (isConflict) {
       database
         .prepare(
@@ -542,15 +560,7 @@ function durabilityApplyReceiptCapsule(
           capsule.capsuleDigest,
         );
     }
-    if (!transactionOpen) {
-      database.exec("COMMIT");
-    }
-  } catch (error) {
-    if (!transactionOpen) {
-      database.exec("ROLLBACK");
-    }
-    throw error;
-  }
+  });
 }
 
 function durabilityVerifyRejectionReceipt(
@@ -599,23 +609,20 @@ function durabilityVerifyRejectionReceipt(
 }
 
 function durabilityApplyCapsule(database, capsule, transactionOpen = false) {
-  durabilityVerifyCapsule(capsule);
-  const existing = database
-    .prepare(
-      "SELECT capsule_digest FROM commit_identities WHERE commit_id = ?",
-    )
-    .get(capsule.commitId);
-  if (existing !== undefined) {
-    if (existing.capsule_digest !== capsule.capsuleDigest) {
-      throw new Error("Commit ID does not match its recovery capsule");
+  return durabilityUseWriterTransaction(database, transactionOpen, () => {
+    durabilityVerifyCapsule(capsule);
+    const existing = database
+      .prepare(
+        "SELECT capsule_digest FROM commit_identities WHERE commit_id = ?",
+      )
+      .get(capsule.commitId);
+    if (existing !== undefined) {
+      if (existing.capsule_digest !== capsule.capsuleDigest) {
+        throw new Error("Commit ID does not match its recovery capsule");
+      }
+      return;
     }
-    return;
-  }
 
-  if (!transactionOpen) {
-    database.exec("BEGIN IMMEDIATE");
-  }
-  try {
     const metadata = durabilityReadMetadata(database);
     const state = durabilityReadState(database);
     if (
@@ -741,15 +748,7 @@ function durabilityApplyCapsule(database, capsule, transactionOpen = false) {
         capsule.commitId,
         canonicalJson(run),
       );
-    if (!transactionOpen) {
-      database.exec("COMMIT");
-    }
-  } catch (error) {
-    if (!transactionOpen) {
-      database.exec("ROLLBACK");
-    }
-    throw error;
-  }
+  });
 }
 
 function durabilityVerifyCommit(database, capsules, commitId) {
@@ -883,48 +882,60 @@ function durabilityVerifyCommit(database, capsules, commitId) {
   return capsule;
 }
 
-function durabilityRecoverAndVerify(database, layout) {
-  const { capsules, prepared } = durabilityPreparedCapsules(database, layout);
-  if (prepared.length > 1) {
-    throw new Error("multiple prepared recovery capsules require recovery");
-  }
-  if (prepared.length === 1) {
-    durabilityApplyCapsule(database, prepared[0]);
-  }
-
-  const state = durabilityReadState(database);
-  if (state.cursor.revision === 0) {
-    if (state.cursor.commitId !== DURABILITY_GENESIS_COMMIT_ID) {
-      throw new Error("genesis projection has an invalid commit identity");
+function durabilityRecoverAndVerify(
+  database,
+  layout,
+  transactionOpen = false,
+) {
+  return durabilityUseWriterTransaction(database, transactionOpen, () => {
+    const { capsules, prepared } = durabilityPreparedCapsules(database, layout);
+    if (prepared.length > 1) {
+      throw new Error("multiple prepared recovery capsules require recovery");
     }
-  } else {
-    durabilityVerifyCommit(database, capsules, state.cursor.commitId);
-  }
-  durabilityRecoverReceiptCapsules(database, layout);
+    if (prepared.length === 1) {
+      durabilityApplyCapsule(database, prepared[0], true);
+    }
+
+    const state = durabilityReadState(database);
+    if (state.cursor.revision === 0) {
+      if (state.cursor.commitId !== DURABILITY_GENESIS_COMMIT_ID) {
+        throw new Error("genesis projection has an invalid commit identity");
+      }
+    } else {
+      durabilityVerifyCommit(database, capsules, state.cursor.commitId);
+    }
+    durabilityRecoverReceiptCapsules(database, layout, true);
+  });
 }
 
-function durabilityRecoverReceiptCapsules(database, layout) {
-  const receiptCapsules = durabilityReadReceiptCapsules(layout);
-  for (const capsule of receiptCapsules) {
-    durabilityApplyReceiptCapsule(database, capsule);
-  }
-  const rejectedRequests = database
-    .prepare(
-      `SELECT request_id, request_digest
-       FROM request_receipts WHERE disposition = 'rejected'
-       UNION ALL
-       SELECT request_id, request_digest FROM request_conflict_receipts`,
-    )
-    .all();
-  for (const row of rejectedRequests) {
-    durabilityVerifyRejectionReceipt(
-      database,
-      receiptCapsules,
-      row.request_id,
-      row.request_digest,
-    );
-  }
-  return receiptCapsules;
+function durabilityRecoverReceiptCapsules(
+  database,
+  layout,
+  transactionOpen = false,
+) {
+  return durabilityUseWriterTransaction(database, transactionOpen, () => {
+    const receiptCapsules = durabilityReadReceiptCapsules(layout);
+    for (const capsule of receiptCapsules) {
+      durabilityApplyReceiptCapsule(database, capsule, true);
+    }
+    const rejectedRequests = database
+      .prepare(
+        `SELECT request_id, request_digest
+         FROM request_receipts WHERE disposition = 'rejected'
+         UNION ALL
+         SELECT request_id, request_digest FROM request_conflict_receipts`,
+      )
+      .all();
+    for (const row of rejectedRequests) {
+      durabilityVerifyRejectionReceipt(
+        database,
+        receiptCapsules,
+        row.request_id,
+        row.request_digest,
+      );
+    }
+    return receiptCapsules;
+  });
 }
 
 function durabilityBuildCapsule(database, candidate) {
@@ -997,10 +1008,14 @@ function durabilityPreparedCapsules(database, layout) {
   };
 }
 
-function durabilityCommitCandidate(database, layout, candidate) {
-  let capsule;
-  database.exec("BEGIN IMMEDIATE");
-  try {
+function durabilityCommitCandidate(
+  database,
+  layout,
+  candidate,
+  transactionOpen = false,
+) {
+  return durabilityUseWriterTransaction(database, transactionOpen, () => {
+    let capsule;
     const existing = database
       .prepare(
         `SELECT request_digest, disposition, receipt_json, commit_id
@@ -1052,24 +1067,23 @@ function durabilityCommitCandidate(database, layout, candidate) {
       }
       durabilityApplyCapsule(database, capsule, true);
     }
-    database.exec("COMMIT");
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
-
-  durabilityVerifyCommit(
-    database,
-    durabilityReadCapsules(layout),
-    capsule.commitId,
-  );
-  return structuredClone(capsule.receipt);
+    durabilityVerifyCommit(
+      database,
+      durabilityReadCapsules(layout),
+      capsule.commitId,
+    );
+    return structuredClone(capsule.receipt);
+  });
 }
 
-function durabilityRecordRejection(database, layout, candidate) {
-  let capsule;
-  database.exec("BEGIN IMMEDIATE");
-  try {
+function durabilityRecordRejection(
+  database,
+  layout,
+  candidate,
+  transactionOpen = false,
+) {
+  return durabilityUseWriterTransaction(database, transactionOpen, () => {
+    let capsule;
     const { prepared } = durabilityPreparedCapsules(database, layout);
     if (prepared.length > 0) {
       throw new Error(
@@ -1138,19 +1152,120 @@ function durabilityRecordRejection(database, layout, candidate) {
       }
       durabilityApplyReceiptCapsule(database, capsule, true);
     }
-    database.exec("COMMIT");
-  } catch (error) {
-    database.exec("ROLLBACK");
-    throw error;
-  }
+    durabilityVerifyRejectionReceipt(
+      database,
+      durabilityReadReceiptCapsules(layout),
+      candidate.requestId,
+      candidate.requestDigest,
+    );
+    return structuredClone(capsule.receipt);
+  });
+}
 
-  durabilityVerifyRejectionReceipt(
-    database,
-    durabilityReadReceiptCapsules(layout),
-    candidate.requestId,
-    candidate.requestDigest,
-  );
-  return structuredClone(capsule.receipt);
+function durabilityReceipt(
+  database,
+  layout,
+  requestId,
+  requestDigest,
+  transactionOpen = false,
+) {
+  return durabilityUseWriterTransaction(database, transactionOpen, () => {
+    const receiptCapsules = durabilityRecoverReceiptCapsules(
+      database,
+      layout,
+      true,
+    );
+    const row = database
+      .prepare(
+        `SELECT request_digest, disposition, receipt_json, commit_id
+         FROM request_receipts WHERE request_id = ?`,
+      )
+      .get(requestId);
+    if (row === undefined) {
+      return null;
+    }
+    if (row.request_digest !== requestDigest) {
+      const conflict = database
+        .prepare(
+          `SELECT request_digest, receipt_json
+           FROM request_conflict_receipts
+           WHERE request_id = ? AND request_digest = ?`,
+        )
+        .get(requestId, requestDigest);
+      if (conflict === undefined) {
+        return {
+          conflictWithDigest: row.request_digest,
+          priorReceipt: JSON.parse(row.receipt_json),
+        };
+      }
+      durabilityVerifyRejectionReceipt(
+        database,
+        receiptCapsules,
+        requestId,
+        requestDigest,
+      );
+      return {
+        requestDigest: conflict.request_digest,
+        receipt: JSON.parse(conflict.receipt_json),
+      };
+    }
+    if (row.disposition === "accepted") {
+      durabilityVerifyCommit(
+        database,
+        durabilityReadCapsules(layout),
+        row.commit_id,
+      );
+    } else if (row.disposition === "rejected") {
+      durabilityVerifyRejectionReceipt(
+        database,
+        receiptCapsules,
+        requestId,
+        requestDigest,
+      );
+    } else {
+      throw new Error("request receipt has an unknown disposition");
+    }
+    return {
+      requestDigest: row.request_digest,
+      receipt: JSON.parse(row.receipt_json),
+    };
+  });
+}
+
+function durabilityOperations(database, layout) {
+  return {
+    inspect() {
+      return durabilityReadState(database);
+    },
+
+    receipt(requestId, requestDigest) {
+      return durabilityReceipt(
+        database,
+        layout,
+        requestId,
+        requestDigest,
+        true,
+      );
+    },
+
+    commit(candidate) {
+      return durabilityCommitCandidate(
+        database,
+        layout,
+        candidate,
+        true,
+      );
+    },
+
+    reject(candidate) {
+      return durabilityRecordRejection(
+        database,
+        layout,
+        candidate,
+        true,
+      );
+    },
+  };
 }
 
 export function openDurability(options) {
@@ -1174,78 +1289,15 @@ export function openDurability(options) {
   }
 
   return {
-    recover() {
-      durabilityRecoverAndVerify(database, layout);
-    },
-
     inspect() {
       return durabilityReadState(database);
     },
 
-    receipt(requestId, requestDigest) {
-      durabilityRecoverReceiptCapsules(database, layout);
-      const row = database
-        .prepare(
-          `SELECT request_digest, disposition, receipt_json, commit_id
-           FROM request_receipts WHERE request_id = ?`,
-        )
-        .get(requestId);
-      if (row === undefined) {
-        return null;
-      }
-      if (row.request_digest !== requestDigest) {
-        const conflict = database
-          .prepare(
-            `SELECT request_digest, receipt_json
-             FROM request_conflict_receipts
-             WHERE request_id = ? AND request_digest = ?`,
-          )
-          .get(requestId, requestDigest);
-        if (conflict === undefined) {
-          return {
-            conflictWithDigest: row.request_digest,
-            priorReceipt: JSON.parse(row.receipt_json),
-          };
-        }
-        durabilityVerifyRejectionReceipt(
-          database,
-          durabilityReadReceiptCapsules(layout),
-          requestId,
-          requestDigest,
-        );
-        return {
-          requestDigest: conflict.request_digest,
-          receipt: JSON.parse(conflict.receipt_json),
-        };
-      }
-      if (row.disposition === "accepted") {
-        durabilityVerifyCommit(
-          database,
-          durabilityReadCapsules(layout),
-          row.commit_id,
-        );
-      } else if (row.disposition === "rejected") {
-        durabilityVerifyRejectionReceipt(
-          database,
-          durabilityReadReceiptCapsules(layout),
-          requestId,
-          requestDigest,
-        );
-      } else {
-        throw new Error("request receipt has an unknown disposition");
-      }
-      return {
-        requestDigest: row.request_digest,
-        receipt: JSON.parse(row.receipt_json),
-      };
-    },
-
-    commit(candidate) {
-      return durabilityCommitCandidate(database, layout, candidate);
-    },
-
-    reject(candidate) {
-      return durabilityRecordRejection(database, layout, candidate);
+    act(operation) {
+      return durabilityUseWriterTransaction(database, false, () => {
+        durabilityRecoverAndVerify(database, layout, true);
+        return operation(durabilityOperations(database, layout));
+      });
     },
 
     close() {
