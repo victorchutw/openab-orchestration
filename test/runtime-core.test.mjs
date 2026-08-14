@@ -504,6 +504,24 @@ test("restart rejects a changed authoritative SQLite Run projection", () =>
     );
   }));
 
+test("restart rejects a current projection revision that differs from its capsule", () =>
+  withAcceptedStorage(({ options, primaryRoot }) => {
+    const database = new DatabaseSync(
+      join(primaryRoot, "runtime-core.sqlite3"),
+    );
+    database
+      .prepare(
+        "UPDATE current_projection SET revision = 99 WHERE singleton = 1",
+      )
+      .run();
+    database.close();
+
+    assert.throws(
+      () => openRuntimeCore(options),
+      /authoritative current projection differs from its capsule/,
+    );
+  }));
+
 test("restart validates capsule mutations against the original Act payload", () =>
   withAcceptedStorage(({ options, recoveryRoot }) => {
     const commitsDirectory = join(recoveryRoot, "commits");
@@ -521,7 +539,7 @@ test("restart validates capsule mutations against the original Act payload", () 
     );
   }));
 
-test("a failed SQLite apply leaves at most one prepared recovery revision", async () => {
+test("a later Act recovers one prepared revision before disposition", async () => {
   const root = mkdtempSync(join(tmpdir(), "openab-runtime-prepared-"));
   const primaryRoot = join(root, "primary");
   const recoveryRoot = join(root, "recovery");
@@ -559,37 +577,91 @@ test("a failed SQLite apply leaves at most one prepared recovery revision", asyn
       .run();
     database.close();
 
+    const preparedRequest = {
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:prepared-1",
+      offer: observed.offers[0].offer,
+      action: {
+        kind: "SubmitObjective",
+        payload: { objective: "Prepare the first capsule" },
+      },
+    };
     await assert.rejects(
-      core.operator({
-        kind: "Act",
-        principal: OPERATOR_ID,
-        locale: "en",
-        requestId: "request:prepared-1",
-        offer: observed.offers[0].offer,
-        action: {
-          kind: "SubmitObjective",
-          payload: { objective: "Prepare the first capsule" },
-        },
-      }),
+      core.operator(preparedRequest),
       /UNIQUE constraint failed: runs.run_id/,
     );
-    await assert.rejects(
-      core.operator({
-        kind: "Act",
-        principal: OPERATOR_ID,
-        locale: "en",
-        requestId: "request:prepared-2",
-        offer: observed.offers[0].offer,
-        action: {
-          kind: "SubmitObjective",
-          payload: { objective: "Do not prepare another capsule" },
-        },
-      }),
-      /prepared recovery capsule must be completed before another request/,
+
+    const repairDatabase = new DatabaseSync(
+      join(primaryRoot, "runtime-core.sqlite3"),
     );
+    repairDatabase
+      .prepare("DELETE FROM runs WHERE created_revision = 99")
+      .run();
+    repairDatabase.close();
+
+    const later = await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:prepared-2",
+      offer: observed.offers[0].offer,
+      action: {
+        kind: "SubmitObjective",
+        payload: { objective: "Do not prepare another capsule" },
+      },
+    });
+    assert.equal(later.status, "rejected");
+    assert.equal(later.rejection.code, "StaleOffer");
+    assert.deepEqual(later.cursor, {
+      revision: 1,
+      commitId: "commit:prepared-1",
+    });
     assert.equal(readdirSync(join(recoveryRoot, "commits")).length, 1);
+
+    const recovered = await core.operator(preparedRequest);
+    assert.equal(recovered.status, "duplicate");
+    assert.deepEqual(recovered.receipt, {
+      status: "accepted",
+      requestId: "request:prepared-1",
+      commitId: "commit:prepared-1",
+      revision: 1,
+      actionKind: "SubmitObjective",
+      runId: "run:prepared-1",
+      acceptedAt: "2026-08-13T00:00:00.000Z",
+    });
   } finally {
     core.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test(
+  "first recovery subdirectory creation syncs the recovery root",
+  { skip: process.platform === "win32" },
+  () => {
+    const root = mkdtempSync(join(tmpdir(), "openab-recovery-layout-"));
+    const primaryRoot = join(root, "primary");
+    const recoveryRoot = join(root, "recovery");
+    mkdirSync(primaryRoot);
+    mkdirSync(recoveryRoot);
+    chmodSync(recoveryRoot, 0o300);
+    let core;
+
+    try {
+      assert.throws(
+        () => {
+          core = openRuntimeCore(
+            runtimeCoreOptions(primaryRoot, recoveryRoot),
+          );
+        },
+        (error) => error?.code === "EACCES",
+      );
+    } finally {
+      core?.close();
+      chmodSync(recoveryRoot, 0o700);
+      rmSync(root, { recursive: true, force: true });
+    }
+  },
+);

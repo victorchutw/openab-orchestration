@@ -342,8 +342,15 @@ function durabilityVerifyCapsule(capsule) {
 function durabilityRecoveryLayout(recoveryRoot) {
   const commitsDirectory = durabilityJoin(recoveryRoot, "commits");
   const receiptsDirectory = durabilityJoin(recoveryRoot, "receipts");
-  durabilityMkdirSync(commitsDirectory, { recursive: true });
-  durabilityMkdirSync(receiptsDirectory, { recursive: true });
+  const commitsCreated = durabilityMkdirSync(commitsDirectory, {
+    recursive: true,
+  });
+  const receiptsCreated = durabilityMkdirSync(receiptsDirectory, {
+    recursive: true,
+  });
+  if (commitsCreated !== undefined || receiptsCreated !== undefined) {
+    durabilitySyncPath(recoveryRoot);
+  }
   return { commitsDirectory, receiptsDirectory };
 }
 
@@ -854,6 +861,7 @@ function durabilityVerifyCommit(database, capsules, commitId) {
       (offer) => offer.offer === capsule.mutations.consumedOffer,
     );
     if (
+      state.cursor.revision !== capsule.revision ||
       canonicalJson(state.run) !== canonicalJson(capsule.mutations.run) ||
       canonicalJson(state.latestReceipt) !== canonicalJson(capsule.receipt)
     ) {
@@ -1166,6 +1174,10 @@ export function openDurability(options) {
   }
 
   return {
+    recover() {
+      durabilityRecoverAndVerify(database, layout);
+    },
+
     inspect() {
       return durabilityReadState(database);
     },

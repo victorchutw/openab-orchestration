@@ -60,6 +60,35 @@ function runtimeRejectedReply(durability, request, rejection, receipt) {
   );
 }
 
+function runtimeDurablyReject(
+  durability,
+  options,
+  request,
+  requestDigest,
+  rejection,
+  conflictWithDigest,
+) {
+  const receipt = createRejectionReceipt(
+    durability.inspect(),
+    request,
+    rejection,
+    options.clock(),
+  );
+  const durableReceipt = durability.reject({
+    requestId: request.requestId,
+    requestDigest,
+    requestContent: operatorRequestContent(request),
+    conflictWithDigest,
+    receipt,
+  });
+  return runtimeRejectedReply(
+    durability,
+    request,
+    rejection,
+    durableReceipt,
+  );
+}
+
 export function openRuntimeCore(rawOptions) {
   const options = runtimeNormalizeOptions(rawOptions);
   const durability = openDurability({
@@ -86,6 +115,7 @@ export function openRuntimeCore(rawOptions) {
         );
       }
 
+      durability.recover();
       const contentDigest = operatorRequestDigest(request);
       const prior = durability.receipt(request.requestId, contentDigest);
       if (prior !== null) {
@@ -94,25 +124,13 @@ export function openRuntimeCore(rawOptions) {
             code: "RequestIdConflict",
             message: "requestId was already used with different content",
           };
-          const state = durability.inspect();
-          const receipt = createRejectionReceipt(
-            state,
-            request,
-            rejection,
-            options.clock(),
-          );
-          const durableReceipt = durability.reject({
-            requestId: request.requestId,
-            requestDigest: contentDigest,
-            requestContent: operatorRequestContent(request),
-            conflictWithDigest: prior.conflictWithDigest,
-            receipt,
-          });
-          return runtimeRejectedReply(
+          return runtimeDurablyReject(
             durability,
+            options,
             request,
+            contentDigest,
             rejection,
-            durableReceipt,
+            prior.conflictWithDigest,
           );
         }
         return projectOperatorReply(
@@ -130,24 +148,12 @@ export function openRuntimeCore(rawOptions) {
         effectIntentId: options.identifiers.effectIntent(),
       });
       if (proposed.rejection !== undefined) {
-        const state = durability.inspect();
-        const receipt = createRejectionReceipt(
-          state,
-          request,
-          proposed.rejection,
-          options.clock(),
-        );
-        const durableReceipt = durability.reject({
-          requestId: request.requestId,
-          requestDigest: contentDigest,
-          requestContent: operatorRequestContent(request),
-          receipt,
-        });
-        return runtimeRejectedReply(
+        return runtimeDurablyReject(
           durability,
+          options,
           request,
+          contentDigest,
           proposed.rejection,
-          durableReceipt,
         );
       }
       const receipt = durability.commit(proposed.candidate);
