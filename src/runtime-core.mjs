@@ -25,9 +25,22 @@ function runtimeNormalizeOptions(options) {
   ]) {
     requireNonEmptyString(options?.[field], field);
   }
+  if (
+    options.secretReferenceGenerations === null ||
+    typeof options.secretReferenceGenerations !== "object" ||
+    Array.isArray(options.secretReferenceGenerations)
+  ) {
+    throw new TypeError("secretReferenceGenerations must be an object");
+  }
   const identifiers = {
     offer:
       options.identifiers?.offer ??
+      (() => `offer:${runtimeRandomBytes(32).toString("base64url")}`),
+    restoreOffer:
+      options.identifiers?.restoreOffer ??
+      (() => `offer:${runtimeRandomBytes(32).toString("base64url")}`),
+    postRestoreOffer:
+      options.identifiers?.postRestoreOffer ??
       (() => `offer:${runtimeRandomBytes(32).toString("base64url")}`),
     run: options.identifiers?.run ?? (() => `run:${runtimeRandomUUID()}`),
     commit:
@@ -91,21 +104,101 @@ function runtimeDurablyReject(
 
 export function openRuntimeCore(rawOptions) {
   const options = runtimeNormalizeOptions(rawOptions);
-  const durability = openDurability({
+  const initialOffer = createInitialOffer(
+    options.identifiers.offer(),
+    options.operatorIdentity,
+  );
+  const recoveryOffer = options.identifiers.restoreOffer();
+  requireNonEmptyString(recoveryOffer, "identifiers.restoreOffer result");
+  const postRestoreOffer = createInitialOffer(
+    options.identifiers.postRestoreOffer(),
+    options.operatorIdentity,
+  );
+  const durabilityOptions = {
     primaryRoot: options.primaryRoot,
     recoveryRoot: options.recoveryRoot,
     operatorIdentity: options.operatorIdentity,
     configurationRevision: options.configurationRevision,
     effectiveConfigurationDigest: options.effectiveConfigurationDigest,
-    initialOffer: createInitialOffer(
-      options.identifiers.offer(),
-      options.operatorIdentity,
-    ),
-  });
+    secretReferenceGenerations: options.secretReferenceGenerations,
+    initialOffer,
+  };
+  let durability = openDurability(durabilityOptions);
 
   return {
     async operator(request) {
       authorizeOperatorRequest(request, options.operatorIdentity);
+      if (durability.kind === "RecoveryRequired") {
+        const state = durability.inspect();
+        const recoveryPointIds = state.recovery.recoveryPoints.map(
+          (point) => point.id,
+        );
+        if (request.kind === "Act") {
+          if (
+            request.offer !== recoveryOffer ||
+            request.action.kind !== "Restore" ||
+            !recoveryPointIds.includes(request.action.payload.recoveryPoint)
+          ) {
+            throw new Error("Restore action does not match an offered recovery point");
+          }
+          const activation = durability.restore({
+            request,
+            requestDigest: operatorRequestDigest(request),
+            recoveryPointId: request.action.payload.recoveryPoint,
+            restoredAt: options.clock(),
+            replacementOffer: postRestoreOffer,
+          });
+          durability.close();
+          durability = openDurability(durabilityOptions);
+          return projectOperatorReply(
+            activation.state,
+            request.principal,
+            request.locale,
+            { status: "accepted", receipt: activation.receipt },
+          );
+        }
+        return {
+          status: "observed",
+          cursor: structuredClone(state.cursor),
+          view: {
+            locale: request.locale,
+            run: null,
+            latestReceipt: null,
+            recovery: structuredClone(state.recovery),
+            copy:
+              request.locale === "zh-TW"
+                ? {
+                    status: "主要儲存已遺失，需要復原",
+                    nextAction:
+                      recoveryPointIds.length === 0
+                        ? "等待 Operator 提供相符的設定與 Secret 參照世代"
+                        : "選擇已驗證的復原點",
+                  }
+                : {
+                    status: "Primary storage recovery is required",
+                    nextAction:
+                      recoveryPointIds.length === 0
+                        ? "Wait for matching configuration and secret-reference generations"
+                        : "Select a verified recovery point",
+                  },
+          },
+          offers:
+            recoveryPointIds.length === 0
+              ? []
+              : [
+                  {
+                    kind: "Restore",
+                    offer: recoveryOffer,
+                    constraints: {
+                      recoveryPoint: {
+                        type: "string",
+                        enum: recoveryPointIds,
+                      },
+                    },
+                  },
+                ],
+        };
+      }
       if (request.kind === "Observe") {
         return projectOperatorReply(
           durability.inspect(),

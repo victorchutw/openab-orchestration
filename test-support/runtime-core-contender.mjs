@@ -9,6 +9,9 @@ const core = openRuntimeCore({
   operatorIdentity: "operator:test",
   configurationRevision: "configuration:test-1",
   effectiveConfigurationDigest: `sha256:${"a".repeat(64)}`,
+  secretReferenceGenerations: {
+    "execution-worker/provider-authentication": "generation:test-provider-1",
+  },
   clock: () => "2026-08-13T00:00:00.000Z",
   identifiers: {
     offer: () => "offer:contended",

@@ -1,6 +1,7 @@
 import { canonicalDigest, requireNonEmptyString } from "./canonical.mjs";
 
 export const SUBMIT_OBJECTIVE = "SubmitObjective";
+export const RESTORE = "Restore";
 export const SUBMIT_OBJECTIVE_CONSTRAINTS = Object.freeze({
   objective: Object.freeze({
     type: "string",
@@ -15,12 +16,17 @@ const CORE_OPERATOR_COPY = Object.freeze({
     idleNextAction: "Submit an objective",
     planningStatus: "Run is active in Planning",
     planningNextAction: "Await the Orchestrator Agent's Run Plan",
+    reconciliationStatus: "Run restoration requires Reconciliation",
+    reconciliationNextAction:
+      "Reconcile active or uncertain effects before continuing",
   }),
   "zh-TW": Object.freeze({
     idleStatus: "沒有進行中的 Run",
     idleNextAction: "提交目標",
     planningStatus: "Run 正在 Planning 階段進行",
     planningNextAction: "等待 Orchestrator Agent 提出 Run Plan",
+    reconciliationStatus: "Run 復原後需要進行 Reconciliation",
+    reconciliationNextAction: "先調和查證進行中或結果不確定的外部效果",
   }),
 });
 
@@ -61,22 +67,37 @@ function coreValidateAct(request) {
   requireNonEmptyString(request.requestId, "requestId");
   requireNonEmptyString(request.offer, "offer");
   coreRequireOnlyKeys(request.action, ["kind", "payload"], "action");
-  if (request.action.kind !== SUBMIT_OBJECTIVE) {
-    throw new TypeError(`action.kind must be ${SUBMIT_OBJECTIVE}`);
+  if (request.action.kind === SUBMIT_OBJECTIVE) {
+    coreRequireOnlyKeys(
+      request.action.payload,
+      ["objective"],
+      "action.payload",
+    );
+    const objective = request.action.payload.objective;
+    if (
+      typeof objective !== "string" ||
+      objective.length < SUBMIT_OBJECTIVE_CONSTRAINTS.objective.minLength ||
+      objective.length > SUBMIT_OBJECTIVE_CONSTRAINTS.objective.maxLength
+    ) {
+      throw new TypeError("objective must contain between 1 and 4096 characters");
+    }
+    return;
   }
-  coreRequireOnlyKeys(
-    request.action.payload,
-    ["objective"],
-    "action.payload",
+  if (request.action.kind === RESTORE) {
+    coreRequireOnlyKeys(
+      request.action.payload,
+      ["recoveryPoint"],
+      "action.payload",
+    );
+    requireNonEmptyString(
+      request.action.payload.recoveryPoint,
+      "action.payload.recoveryPoint",
+    );
+    return;
+  }
+  throw new TypeError(
+    `action.kind must be ${SUBMIT_OBJECTIVE} or ${RESTORE}`,
   );
-  const objective = request.action.payload.objective;
-  if (
-    typeof objective !== "string" ||
-    objective.length < SUBMIT_OBJECTIVE_CONSTRAINTS.objective.minLength ||
-    objective.length > SUBMIT_OBJECTIVE_CONSTRAINTS.objective.maxLength
-  ) {
-    throw new TypeError("objective must contain between 1 and 4096 characters");
-  }
 }
 
 export function authorizeOperatorRequest(request, operatorIdentity) {
@@ -96,12 +117,13 @@ export function authorizeOperatorRequest(request, operatorIdentity) {
   throw new TypeError("operator request kind must be Observe or Act");
 }
 
-export function createInitialOffer(offer, principal) {
+export function createInitialOffer(offer, principal, authorityEpoch = 1) {
   requireNonEmptyString(offer, "identifiers.offer result");
   return {
     offer,
     principal,
     revision: 0,
+    authorityEpoch,
     actionKind: SUBMIT_OBJECTIVE,
     constraints: SUBMIT_OBJECTIVE_CONSTRAINTS,
     consumedRevision: null,
@@ -133,6 +155,14 @@ export function createRejectionReceipt(state, request, rejection, rejectedAt) {
 }
 
 export function proposeOperatorAction(state, request, generated) {
+  if (request.action.kind === RESTORE) {
+    return {
+      rejection: {
+        code: "ActionNotOffered",
+        message: "Restore is offered only while primary recovery is required",
+      },
+    };
+  }
   const offer = state.offers.find(
     (candidate) => candidate.offer === request.offer,
   );
@@ -157,6 +187,7 @@ export function proposeOperatorAction(state, request, generated) {
   }
   if (
     offer.principal !== request.principal ||
+    offer.authorityEpoch !== state.authorityEpoch ||
     offer.actionKind !== request.action.kind ||
     canonicalDigest(offer.constraints) !==
       canonicalDigest(SUBMIT_OBJECTIVE_CONSTRAINTS)
@@ -224,6 +255,7 @@ export function proposeOperatorAction(state, request, generated) {
           disposition: "Pending",
         },
       ],
+      artifacts: [],
     },
   };
 }
@@ -235,10 +267,19 @@ export function projectOperatorReply(state, principal, locale, result) {
     cursor: structuredClone(state.cursor),
     view: {
       locale,
+      authorityEpoch: state.authorityEpoch,
       run: structuredClone(state.run),
       latestReceipt: structuredClone(state.latestReceipt),
+      ...(state.recovery === null
+        ? {}
+        : { recovery: structuredClone(state.recovery) }),
       copy:
-        state.run === null
+        state.recovery !== null
+          ? {
+              status: copy.reconciliationStatus,
+              nextAction: copy.reconciliationNextAction,
+            }
+          : state.run === null
           ? {
               status: copy.idleStatus,
               nextAction: copy.idleNextAction,

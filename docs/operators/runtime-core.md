@@ -11,6 +11,7 @@ const core = openRuntimeCore({
   operatorIdentity,
   configurationRevision,
   effectiveConfigurationDigest,
+  secretReferenceGenerations,
 });
 
 const observation = await core.operator({
@@ -38,13 +39,18 @@ distinct storage locations. Runtime databases, commit capsules, Operator
 objectives, receipts, and audit records are private runtime records and must
 not be copied into the checkout or an issue.
 
+`secretReferenceGenerations` is the non-secret purpose-to-generation map from
+preflight. The Runtime Core records this map with the effective configuration
+digest. It never receives or resolves Secret Material.
+
 ## Observe
 
 `Observe` returns a monotonic `{ revision, commitId }` cursor, the current Run
 projection, the latest accepted receipt, and the Operator Actions legal at that
 cursor. With no non-terminal Run, exactly one opaque `SubmitObjective` offer is
 returned. The offer is bound to the authenticated Operator, current revision,
-action kind, and objective constraints. Callers treat its value as opaque.
+authority epoch, action kind, and objective constraints. Callers treat its
+value as opaque. Every normal view also discloses the current `authorityEpoch`.
 
 The supported locales are `en` and `zh-TW`. Locale changes presentation copy
 only. Run values, action kinds, offer values, constraints, cursors, and
@@ -74,6 +80,71 @@ Restart verifies the authoritative head against recovery storage. If the one
 next capsule is durable but its matching SQLite transaction was interrupted,
 restart verifies and completes that same Commit ID before exposing the Run. A
 missing or changed capsule is an integrity error and startup fails closed.
+
+Each acknowledged state retains immutable, digest-verified SQLite generations.
+The recovery boundary also retains the contiguous ordered capsule tail and the
+same content-addressed artifact bytes referenced by SQLite and the capsules.
+The current implementation retains every verified generation; it does not
+prune an older known-good generation. Consequently at least two independently
+restorable generations exist after the first accepted transition.
+
+## Explicit primary-storage Restore
+
+If the authoritative database is missing while recovery material exists,
+opening the Runtime Core does not create a replacement database, apply a tail,
+or select a rollback point. `Observe` instead returns `RecoveryRequired`,
+`Waiting for Operator`, and all verified recovery points for the highest known
+authority epoch. Every offered point names its source and target cursors,
+configuration and secret-reference generations, capsule-tail length, and
+referenced-artifact count. Points from older generations are offered only when
+they reconstruct the same latest authoritative head; Restore never offers an
+older head as a rollback.
+
+When the current preflight inputs do not match the frozen configuration or
+secret-reference generations, `Observe` discloses the required non-secret
+generations but offers no Restore action. The Operator must restore those
+inputs and reopen the Runtime Core. The frozen Run is not weakened or changed.
+
+Select one offered point using its opaque recovery point ID and the separate
+Restore offer:
+
+```js
+const recovery = await core.operator({
+  kind: "Observe",
+  principal: operatorIdentity,
+  locale: "en",
+});
+
+const point = recovery.view.recovery.recoveryPoints[0];
+const restored = await core.operator({
+  kind: "Act",
+  principal: operatorIdentity,
+  locale: "en",
+  requestId: crypto.randomUUID(),
+  offer: recovery.offers[0].offer,
+  action: {
+    kind: "Restore",
+    payload: { recoveryPoint: point.id },
+  },
+});
+```
+
+Restore copies the selected verified generation into a candidate, applies and
+verifies its contiguous capsule tail and durable rejection receipts,
+reconstructs every referenced artifact from recovery CAS, and runs SQLite and
+domain integrity checks. Only then does it atomically activate the database.
+Activation increments the authority epoch, fences every capability from the
+earlier epoch, and records a durable Restore receipt. A failed activation
+leaves no authoritative database and can be retried only after the failure is
+observed and corrected.
+
+Known pending, active, or uncertain Effect Intents are not dispatched,
+cancelled, or declared failed by Restore. They appear under an
+Installation-wide `Reconciliation` recovery gate and the Operator view's next
+action is to reconcile those effects. Reopening the Runtime Core preserves the
+gate, cursor, Run, original receipts, audit history, and one authoritative
+head. Earlier-epoch effect participation is recorded as late-evidence-only
+when a later restore supersedes its gate.
 
 ## Replay and rejection
 

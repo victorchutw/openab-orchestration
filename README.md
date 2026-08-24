@@ -40,10 +40,12 @@ source control, not the operational source of truth.
 
 ## Status
 
-- Runtime Core currently supports observing, durably creating, restarting, and
-  exactly replaying the first Planning / Active Run. Later lifecycle
-  transitions and adapters are not yet implemented, and no production
-  deployment is supported.
+- Runtime Core currently supports observing, durably creating, restarting,
+  exactly replaying, and explicitly restoring the first Planning / Active Run
+  under a new authority epoch. Restore activates only a fully verified
+  generation-plus-capsule candidate and gates uncertain effects for
+  Reconciliation. Later lifecycle transitions and adapters are not yet
+  implemented, and no production deployment is supported.
 - One Orchestrator Agent, one Coding Agent, and two decision-isolated Reviewer
   Agents are in the MVP destination.
 - One bounded remediation round is allowed before returning to the Operator.

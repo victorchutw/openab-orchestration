@@ -1,13 +1,21 @@
-import { randomUUID as durabilityRandomUUID } from "node:crypto";
+import {
+  createHash as durabilityCreateHash,
+  randomUUID as durabilityRandomUUID,
+} from "node:crypto";
 import {
   chmodSync as durabilityChmodSync,
   closeSync as durabilityCloseSync,
+  copyFileSync as durabilityCopyFileSync,
+  existsSync as durabilityExistsSync,
   fsyncSync as durabilityFsyncSync,
   linkSync as durabilityLinkSync,
   mkdirSync as durabilityMkdirSync,
   openSync as durabilityOpenSync,
   readFileSync as durabilityReadFileSync,
   readdirSync as durabilityReaddirSync,
+  renameSync as durabilityRenameSync,
+  rmSync as durabilityRmSync,
+  statSync as durabilityStatSync,
   unlinkSync as durabilityUnlinkSync,
   writeFileSync as durabilityWriteFileSync,
 } from "node:fs";
@@ -22,6 +30,112 @@ import {
 
 const DURABILITY_SCHEMA_VERSION = 1;
 const DURABILITY_GENESIS_COMMIT_ID = "GENESIS";
+
+function durabilityDatabasePath(primaryRoot) {
+  return durabilityJoin(primaryRoot, "runtime-core.sqlite3");
+}
+
+function durabilityDigestBytes(value) {
+  return `sha256:${durabilityCreateHash("sha256").update(value).digest("hex")}`;
+}
+
+function durabilityObjectPath(root, digest) {
+  const value = digest.slice("sha256:".length);
+  return durabilityJoin(root, "objects", "sha256", value.slice(0, 2), value.slice(2));
+}
+
+function durabilityNormalizeArtifacts(artifacts) {
+  if (!Array.isArray(artifacts)) {
+    throw new TypeError("CommitCandidate artifacts must be an array");
+  }
+  const seen = new Set();
+  return artifacts.map((artifact) => {
+    requireNonEmptyString(artifact?.digest, "artifact.digest");
+    if (!/^sha256:[a-f0-9]{64}$/.test(artifact.digest)) {
+      throw new TypeError("artifact.digest must be a lowercase SHA-256 digest");
+    }
+    if (seen.has(artifact.digest)) {
+      throw new Error("CommitCandidate contains a duplicate artifact digest");
+    }
+    seen.add(artifact.digest);
+    if (!ArrayBuffer.isView(artifact.bytes)) {
+      throw new TypeError("artifact.bytes must be a byte array");
+    }
+    const bytes = Buffer.from(
+      artifact.bytes.buffer,
+      artifact.bytes.byteOffset,
+      artifact.bytes.byteLength,
+    );
+    if (
+      artifact.size !== bytes.byteLength ||
+      artifact.digest !== durabilityDigestBytes(bytes)
+    ) {
+      throw new Error("artifact bytes do not match their size and digest");
+    }
+    return { digest: artifact.digest, size: artifact.size, bytes };
+  });
+}
+
+function durabilityVerifyObject(root, artifact) {
+  const path = durabilityObjectPath(root, artifact.digest);
+  if (!durabilityExistsSync(path)) {
+    throw new Error(`content-addressed artifact is missing: ${artifact.digest}`);
+  }
+  const bytes = durabilityReadFileSync(path);
+  if (
+    bytes.byteLength !== artifact.size ||
+    durabilityDigestBytes(bytes) !== artifact.digest
+  ) {
+    throw new Error(`content-addressed artifact does not verify: ${artifact.digest}`);
+  }
+  return bytes;
+}
+
+function durabilityPromoteObject(root, artifact) {
+  const path = durabilityObjectPath(root, artifact.digest);
+  if (durabilityExistsSync(path)) {
+    durabilityVerifyObject(root, artifact);
+    return;
+  }
+  const directory = durabilityJoin(
+    root,
+    "objects",
+    "sha256",
+    artifact.digest.slice(7, 9),
+  );
+  durabilityMkdirSync(directory, { recursive: true });
+  const temporaryPath = durabilityJoin(
+    directory,
+    `.tmp-${durabilityRandomUUID()}`,
+  );
+  durabilityWriteFileSync(temporaryPath, artifact.bytes, {
+    flag: "wx",
+    mode: 0o600,
+  });
+  durabilitySyncPath(temporaryPath);
+  try {
+    durabilityLinkSync(temporaryPath, path);
+    durabilityChmodSync(path, 0o400);
+    durabilitySyncPath(directory);
+  } finally {
+    durabilityUnlinkSync(temporaryPath);
+    durabilitySyncPath(directory);
+  }
+}
+
+function durabilityRequireSecretReferenceGenerations(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("secretReferenceGenerations must be an object");
+  }
+  for (const [purpose, generation] of Object.entries(value)) {
+    requireNonEmptyString(purpose, "secretReferenceGenerations purpose");
+    requireNonEmptyString(
+      generation,
+      `secretReferenceGenerations.${purpose}`,
+    );
+  }
+  return canonicalJson(value);
+}
 
 function durabilitySyncPath(path) {
   const descriptor = durabilityOpenSync(path, "r");
@@ -53,7 +167,7 @@ function durabilityWriteImmutableJson(path, directory, value) {
 function durabilityOpenDatabase(primaryRoot) {
   durabilityMkdirSync(primaryRoot, { recursive: true });
   const database = new DurabilityDatabaseSync(
-    durabilityJoin(primaryRoot, "runtime-core.sqlite3"),
+    durabilityDatabasePath(primaryRoot),
   );
   database.exec("PRAGMA journal_mode=WAL");
   database.exec("PRAGMA synchronous=FULL");
@@ -74,6 +188,7 @@ function durabilityOpenDatabase(primaryRoot) {
       offer TEXT PRIMARY KEY,
       principal TEXT NOT NULL,
       revision INTEGER NOT NULL,
+      authority_epoch INTEGER NOT NULL,
       action_kind TEXT NOT NULL,
       constraints_json TEXT NOT NULL,
       consumed_revision INTEGER
@@ -127,6 +242,30 @@ function durabilityOpenDatabase(primaryRoot) {
       effect_kind TEXT NOT NULL,
       disposition TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS artifacts (
+      digest TEXT PRIMARY KEY,
+      size INTEGER NOT NULL CHECK (size >= 0)
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS artifact_relationships (
+      commit_id TEXT NOT NULL REFERENCES commit_identities(commit_id),
+      artifact_digest TEXT NOT NULL REFERENCES artifacts(digest),
+      PRIMARY KEY (commit_id, artifact_digest)
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS recovery_activations (
+      request_id TEXT PRIMARY KEY,
+      request_digest TEXT NOT NULL,
+      receipt_json TEXT NOT NULL,
+      source_recovery_point TEXT NOT NULL,
+      source_manifest_digest TEXT NOT NULL,
+      restored_at TEXT NOT NULL,
+      authority_epoch INTEGER NOT NULL UNIQUE
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS recovery_effects (
+      effect_intent_id TEXT NOT NULL REFERENCES effect_intents(effect_intent_id),
+      authority_epoch INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      PRIMARY KEY (effect_intent_id, authority_epoch)
+    ) STRICT;
     CREATE TRIGGER IF NOT EXISTS immutable_commit_identities_update
       BEFORE UPDATE ON commit_identities BEGIN
         SELECT RAISE(ABORT, 'commit identities are immutable');
@@ -158,6 +297,22 @@ function durabilityOpenDatabase(primaryRoot) {
     CREATE TRIGGER IF NOT EXISTS immutable_audit_records_delete
       BEFORE DELETE ON audit_records BEGIN
         SELECT RAISE(ABORT, 'audit records are immutable');
+      END;
+    CREATE TRIGGER IF NOT EXISTS immutable_recovery_activations_update
+      BEFORE UPDATE ON recovery_activations BEGIN
+        SELECT RAISE(ABORT, 'recovery activations are immutable');
+      END;
+    CREATE TRIGGER IF NOT EXISTS immutable_recovery_activations_delete
+      BEFORE DELETE ON recovery_activations BEGIN
+        SELECT RAISE(ABORT, 'recovery activations are immutable');
+      END;
+    CREATE TRIGGER IF NOT EXISTS immutable_artifact_relationships_update
+      BEFORE UPDATE ON artifact_relationships BEGIN
+        SELECT RAISE(ABORT, 'artifact relationships are immutable');
+      END;
+    CREATE TRIGGER IF NOT EXISTS immutable_artifact_relationships_delete
+      BEFORE DELETE ON artifact_relationships BEGIN
+        SELECT RAISE(ABORT, 'artifact relationships are immutable');
       END;
   `);
   return database;
@@ -204,7 +359,11 @@ function durabilityInitialize(database, options) {
         authorityEpoch: "1",
         configurationRevision: options.configurationRevision,
         effectiveConfigurationDigest: options.effectiveConfigurationDigest,
+        secretReferenceGenerations: durabilityRequireSecretReferenceGenerations(
+          options.secretReferenceGenerations,
+        ),
         operatorIdentity: options.operatorIdentity,
+        recoveryGate: "open",
       })) {
         insertMetadata.run(key, value);
       }
@@ -219,14 +378,15 @@ function durabilityInitialize(database, options) {
       database
         .prepare(
           `INSERT INTO operator_offers
-             (offer, principal, revision, action_kind, constraints_json,
+             (offer, principal, revision, authority_epoch, action_kind, constraints_json,
               consumed_revision)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           offer.offer,
           offer.principal,
           offer.revision,
+          offer.authorityEpoch,
           offer.actionKind,
           canonicalJson(offer.constraints),
           offer.consumedRevision,
@@ -243,6 +403,9 @@ function durabilityInitialize(database, options) {
     schemaVersion: String(DURABILITY_SCHEMA_VERSION),
     configurationRevision: options.configurationRevision,
     effectiveConfigurationDigest: options.effectiveConfigurationDigest,
+    secretReferenceGenerations: durabilityRequireSecretReferenceGenerations(
+      options.secretReferenceGenerations,
+    ),
     operatorIdentity: options.operatorIdentity,
   };
   for (const [key, value] of Object.entries(expected)) {
@@ -253,6 +416,7 @@ function durabilityInitialize(database, options) {
 }
 
 function durabilityReadState(database) {
+  const metadata = durabilityReadMetadata(database);
   const projection = database
     .prepare(
       `SELECT revision, commit_id, run_json
@@ -264,7 +428,7 @@ function durabilityReadState(database) {
   }
   const offers = database
     .prepare(
-      `SELECT offer, principal, revision, action_kind, constraints_json,
+      `SELECT offer, principal, revision, authority_epoch, action_kind, constraints_json,
               consumed_revision
        FROM operator_offers ORDER BY action_kind, offer`,
     )
@@ -273,6 +437,7 @@ function durabilityReadState(database) {
       offer: offer.offer,
       principal: offer.principal,
       revision: offer.revision,
+      authorityEpoch: offer.authority_epoch,
       actionKind: offer.action_kind,
       constraints: JSON.parse(offer.constraints_json),
       consumedRevision: offer.consumed_revision,
@@ -291,6 +456,21 @@ function durabilityReadState(database) {
   ) {
     throw new Error("authoritative current projection has no durable receipt");
   }
+  const activation = database
+    .prepare(
+      `SELECT source_recovery_point, authority_epoch
+       FROM recovery_activations ORDER BY authority_epoch DESC LIMIT 1`,
+    )
+    .get();
+  const pendingEffectIntentIds = database
+    .prepare(
+      `SELECT effect_intent_id FROM recovery_effects
+       WHERE status = 'Pending' AND authority_epoch = ?
+       ORDER BY effect_intent_id`,
+    )
+    .all(Number(metadata.authorityEpoch))
+    .map((row) => row.effect_intent_id);
+  const authorityEpoch = Number(metadata.authorityEpoch);
   return {
     cursor: {
       revision: projection.revision,
@@ -301,6 +481,17 @@ function durabilityReadState(database) {
     latestReceipt:
       latestReceipt === null ? null : JSON.parse(latestReceipt.receipt_json),
     offers,
+    authorityEpoch,
+    recovery:
+      metadata.recoveryGate === "reconciliation"
+        ? {
+            status: "Reconciliation",
+            condition: "Active",
+            authorityEpoch,
+            sourceRecoveryPoint: activation?.source_recovery_point,
+            pendingEffectIntentIds,
+          }
+        : null,
   };
 }
 
@@ -309,12 +500,16 @@ function durabilitySealCapsule(body) {
 }
 
 function durabilityCanonicalRequestContent(content) {
+  const payload =
+    content?.action?.kind === "Restore"
+      ? { recoveryPoint: content?.action?.payload?.recoveryPoint }
+      : { objective: content?.action?.payload?.objective };
   return {
     principal: content?.principal,
     offer: content?.offer,
     action: {
       kind: content?.action?.kind,
-      payload: { objective: content?.action?.payload?.objective },
+      payload,
     },
   };
 }
@@ -327,6 +522,24 @@ function durabilityVerifyCapsule(capsule) {
   }
   if (capsule.format !== "openab.commit-capsule/v1") {
     throw new Error("recovery capsule format is unsupported");
+  }
+  durabilityRequireSecretReferenceGenerations(
+    capsule.configuration?.secretReferenceGenerations,
+  );
+  if (!Array.isArray(capsule.artifacts)) {
+    throw new Error("recovery capsule artifacts are invalid");
+  }
+  const artifactDigests = new Set();
+  for (const artifact of capsule.artifacts) {
+    if (
+      !/^sha256:[a-f0-9]{64}$/.test(artifact?.digest) ||
+      !Number.isSafeInteger(artifact.size) ||
+      artifact.size < 0 ||
+      artifactDigests.has(artifact.digest)
+    ) {
+      throw new Error("recovery capsule artifact identity is invalid");
+    }
+    artifactDigests.add(artifact.digest);
   }
   if (
     canonicalJson(capsule.request.content) !==
@@ -358,19 +571,583 @@ function durabilityVerifyCapsule(capsule) {
   }
 }
 
-function durabilityRecoveryLayout(recoveryRoot) {
+function durabilityRecoveryLayout(recoveryRoot, primaryRoot) {
   const commitsDirectory = durabilityJoin(recoveryRoot, "commits");
   const receiptsDirectory = durabilityJoin(recoveryRoot, "receipts");
+  const generationsDirectory = durabilityJoin(recoveryRoot, "generations");
   const commitsCreated = durabilityMkdirSync(commitsDirectory, {
     recursive: true,
   });
   const receiptsCreated = durabilityMkdirSync(receiptsDirectory, {
     recursive: true,
   });
-  if (commitsCreated !== undefined || receiptsCreated !== undefined) {
+  const generationsCreated = durabilityMkdirSync(generationsDirectory, {
+    recursive: true,
+  });
+  if (
+    commitsCreated !== undefined ||
+    receiptsCreated !== undefined ||
+    generationsCreated !== undefined
+  ) {
     durabilitySyncPath(recoveryRoot);
   }
-  return { commitsDirectory, receiptsDirectory };
+  return {
+    commitsDirectory,
+    receiptsDirectory,
+    generationsDirectory,
+    primaryRoot,
+    recoveryRoot,
+  };
+}
+
+function durabilitySealGeneration(body) {
+  return { ...body, manifestDigest: canonicalDigest(body) };
+}
+
+function durabilityGenerationDirectoryName(manifest) {
+  const revision = String(manifest.cursor.revision).padStart(8, "0");
+  return `${revision}-e${manifest.authorityEpoch}-${manifest.manifestDigest.slice(-16)}`;
+}
+
+function durabilityVerifyGenerationManifest(manifest) {
+  const { manifestDigest, ...body } = manifest;
+  requireNonEmptyString(manifestDigest, "manifestDigest");
+  if (canonicalDigest(body) !== manifestDigest) {
+    throw new Error("recovery generation manifest digest does not verify");
+  }
+  if (manifest.format !== "openab.recovery-generation/v1") {
+    throw new Error("recovery generation format is unsupported");
+  }
+}
+
+function durabilityCreateGeneration(database, layout) {
+  const state = durabilityReadState(database);
+  const metadata = durabilityReadMetadata(database);
+  const referencedArtifacts = database
+    .prepare(
+      `SELECT DISTINCT a.digest, a.size
+       FROM artifact_relationships ar
+       JOIN artifacts a ON a.digest = ar.artifact_digest
+       ORDER BY a.digest`,
+    )
+    .all();
+  const temporaryDirectory = durabilityJoin(
+    layout.generationsDirectory,
+    `.tmp-${durabilityRandomUUID()}`,
+  );
+  durabilityMkdirSync(temporaryDirectory);
+  const databasePath = durabilityJoin(
+    temporaryDirectory,
+    "runtime-core.sqlite3",
+  );
+  try {
+    const quotedPath = databasePath.replaceAll("'", "''");
+    database.exec(`VACUUM main INTO '${quotedPath}'`);
+    durabilitySyncPath(databasePath);
+    const databaseBytes = durabilityReadFileSync(databasePath);
+    const manifest = durabilitySealGeneration({
+      format: "openab.recovery-generation/v1",
+      cursor: state.cursor,
+      authorityEpoch: Number(metadata.authorityEpoch),
+      schemaVersion: Number(metadata.schemaVersion),
+      configurationRevision: metadata.configurationRevision,
+      effectiveConfigurationDigest: metadata.effectiveConfigurationDigest,
+      operatorIdentity: metadata.operatorIdentity,
+      secretReferenceGenerations: JSON.parse(
+        metadata.secretReferenceGenerations,
+      ),
+      database: {
+        size: databaseBytes.byteLength,
+        digest: durabilityDigestBytes(databaseBytes),
+      },
+      referencedArtifacts,
+    });
+    durabilityWriteImmutableJson(
+      durabilityJoin(temporaryDirectory, "manifest.json"),
+      temporaryDirectory,
+      manifest,
+    );
+    durabilityChmodSync(databasePath, 0o400);
+    durabilitySyncPath(temporaryDirectory);
+    const finalDirectory = durabilityJoin(
+      layout.generationsDirectory,
+      durabilityGenerationDirectoryName(manifest),
+    );
+    if (durabilityExistsSync(finalDirectory)) {
+      durabilityRmSync(temporaryDirectory, { recursive: true });
+      return;
+    }
+    durabilityRenameSync(temporaryDirectory, finalDirectory);
+    durabilitySyncPath(layout.generationsDirectory);
+  } catch (error) {
+    durabilityRmSync(temporaryDirectory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function durabilityReadVerifiedGenerations(layout) {
+  const generations = [];
+  for (const name of durabilityReaddirSync(layout.generationsDirectory).sort()) {
+    if (name.startsWith(".tmp-")) {
+      continue;
+    }
+    const directory = durabilityJoin(layout.generationsDirectory, name);
+    const manifestPath = durabilityJoin(directory, "manifest.json");
+    const databasePath = durabilityJoin(directory, "runtime-core.sqlite3");
+    if (
+      !durabilityExistsSync(manifestPath) ||
+      !durabilityExistsSync(databasePath)
+    ) {
+      continue;
+    }
+    try {
+      const manifest = JSON.parse(durabilityReadFileSync(manifestPath, "utf8"));
+      durabilityVerifyGenerationManifest(manifest);
+      const databaseBytes = durabilityReadFileSync(databasePath);
+      if (
+        databaseBytes.byteLength !== manifest.database.size ||
+        durabilityDigestBytes(databaseBytes) !== manifest.database.digest
+      ) {
+        throw new Error("recovery generation database digest does not verify");
+      }
+      const database = new DurabilityDatabaseSync(databasePath, {
+        readOnly: true,
+      });
+      try {
+        if (database.prepare("PRAGMA integrity_check").get().integrity_check !== "ok") {
+          throw new Error("recovery generation database integrity check failed");
+        }
+        const state = durabilityReadState(database);
+        const metadata = durabilityReadMetadata(database);
+        if (
+          canonicalJson(state.cursor) !== canonicalJson(manifest.cursor) ||
+          Number(metadata.authorityEpoch) !== manifest.authorityEpoch ||
+          Number(metadata.schemaVersion) !== manifest.schemaVersion ||
+          metadata.configurationRevision !== manifest.configurationRevision ||
+          metadata.effectiveConfigurationDigest !==
+            manifest.effectiveConfigurationDigest ||
+          metadata.operatorIdentity !== manifest.operatorIdentity ||
+          metadata.secretReferenceGenerations !==
+            canonicalJson(manifest.secretReferenceGenerations)
+        ) {
+          throw new Error("recovery generation metadata does not verify");
+        }
+        const referencedArtifacts = database
+          .prepare(
+            `SELECT DISTINCT a.digest, a.size
+             FROM artifact_relationships ar
+             JOIN artifacts a ON a.digest = ar.artifact_digest
+             ORDER BY a.digest`,
+          )
+          .all();
+        if (
+          canonicalJson(referencedArtifacts) !==
+          canonicalJson(manifest.referencedArtifacts)
+        ) {
+          throw new Error("recovery generation artifacts do not verify");
+        }
+        for (const artifact of manifest.referencedArtifacts) {
+          durabilityVerifyObject(layout.recoveryRoot, artifact);
+        }
+      } finally {
+        database.close();
+      }
+      generations.push({ directory, databasePath, manifest });
+    } catch {
+      // A corrupt or incomplete generation is not offered for restore.
+    }
+  }
+  return generations;
+}
+
+function durabilityBuildRecoveryPoint(generation, capsules, layout) {
+  const tail = capsules
+    .filter(
+      (capsule) => capsule.revision > generation.manifest.cursor.revision,
+    )
+    .sort((left, right) => left.revision - right.revision);
+  let targetCursor = generation.manifest.cursor;
+  let valid = true;
+  const referencedArtifacts = new Map(
+    generation.manifest.referencedArtifacts.map((artifact) => [
+      artifact.digest,
+      artifact,
+    ]),
+  );
+  for (const capsule of tail) {
+    if (
+      capsule.revision !== targetCursor.revision + 1 ||
+      capsule.predecessor !== targetCursor.commitId ||
+      capsule.authorityEpoch !== generation.manifest.authorityEpoch ||
+      capsule.schemaVersion !== generation.manifest.schemaVersion ||
+      capsule.configuration.revision !==
+        generation.manifest.configurationRevision ||
+      capsule.configuration.digest !==
+        generation.manifest.effectiveConfigurationDigest ||
+      canonicalJson(capsule.configuration.secretReferenceGenerations) !==
+        canonicalJson(generation.manifest.secretReferenceGenerations)
+    ) {
+      valid = false;
+      break;
+    }
+    targetCursor = {
+      revision: capsule.revision,
+      commitId: capsule.commitId,
+    };
+    for (const artifact of capsule.artifacts) {
+      const prior = referencedArtifacts.get(artifact.digest);
+      if (prior !== undefined && prior.size !== artifact.size) {
+        valid = false;
+        break;
+      }
+      referencedArtifacts.set(artifact.digest, artifact);
+    }
+  }
+  if (valid) {
+    try {
+      for (const artifact of referencedArtifacts.values()) {
+        durabilityVerifyObject(layout.recoveryRoot, artifact);
+      }
+    } catch {
+      valid = false;
+    }
+  }
+  if (!valid) {
+    return null;
+  }
+  return {
+    generation,
+    tail,
+    public: {
+      id: `recovery-point:${canonicalDigest({
+        generation: generation.manifest.manifestDigest,
+        tail: tail.map((capsule) => capsule.capsuleDigest),
+      }).slice("sha256:".length)}`,
+      sourceCursor: structuredClone(generation.manifest.cursor),
+      targetCursor: structuredClone(targetCursor),
+      authorityEpoch: generation.manifest.authorityEpoch,
+      configurationRevision: generation.manifest.configurationRevision,
+      effectiveConfigurationDigest:
+        generation.manifest.effectiveConfigurationDigest,
+      secretReferenceGenerations: structuredClone(
+        generation.manifest.secretReferenceGenerations,
+      ),
+      capsuleTailLength: tail.length,
+      referencedArtifactCount: referencedArtifacts.size,
+    },
+  };
+}
+
+function durabilityRecoveryRequired(layout, options) {
+  const allVerified = durabilityReadVerifiedGenerations(layout);
+  const verified = allVerified.filter(
+    ({ manifest }) =>
+      manifest.operatorIdentity === options.operatorIdentity &&
+      manifest.configurationRevision === options.configurationRevision &&
+      manifest.effectiveConfigurationDigest ===
+        options.effectiveConfigurationDigest &&
+      canonicalJson(manifest.secretReferenceGenerations) ===
+        durabilityRequireSecretReferenceGenerations(
+          options.secretReferenceGenerations,
+        ),
+  );
+  const capsules = durabilityReadCapsules(layout);
+  const maximumAuthorityEpoch = Math.max(
+    0,
+    ...verified.map(({ manifest }) => manifest.authorityEpoch),
+  );
+  const candidates = verified
+    .filter(
+      ({ manifest }) => manifest.authorityEpoch === maximumAuthorityEpoch,
+    )
+    .map((generation) =>
+      durabilityBuildRecoveryPoint(generation, capsules, layout),
+    )
+    .filter((point) => point !== null);
+  const target = candidates.sort(
+    (left, right) =>
+      right.public.targetCursor.revision - left.public.targetCursor.revision,
+  )[0]?.public.targetCursor;
+  const availablePoints = candidates
+    .filter(
+      (point) => canonicalJson(point.public.targetCursor) === canonicalJson(target),
+    )
+    .sort(
+      (left, right) =>
+        right.public.sourceCursor.revision - left.public.sourceCursor.revision,
+    );
+  const recoveryPoints = availablePoints.map((point) => point.public);
+  const latestUnavailable = allVerified
+    .filter(
+      ({ manifest }) => manifest.operatorIdentity === options.operatorIdentity,
+    )
+    .sort(
+      (left, right) =>
+        right.manifest.cursor.revision - left.manifest.cursor.revision,
+    )[0];
+  const unavailableRecoveryPoints =
+    recoveryPoints.length > 0 || latestUnavailable === undefined
+      ? []
+      : [
+          {
+            sourceCursor: structuredClone(latestUnavailable.manifest.cursor),
+            reason: "ConfigurationOrSecretGenerationUnavailable",
+            requiredConfigurationRevision:
+              latestUnavailable.manifest.configurationRevision,
+            requiredEffectiveConfigurationDigest:
+              latestUnavailable.manifest.effectiveConfigurationDigest,
+            requiredSecretReferenceGenerations: structuredClone(
+              latestUnavailable.manifest.secretReferenceGenerations,
+            ),
+          },
+        ];
+  return {
+    kind: "RecoveryRequired",
+    inspect() {
+      return {
+        cursor:
+          recoveryPoints[0]?.targetCursor ?? {
+            revision: 0,
+            commitId: DURABILITY_GENESIS_COMMIT_ID,
+          },
+        run: null,
+        latestReceipt: null,
+        offers: [],
+        recovery: {
+          status: "RecoveryRequired",
+          condition: "Waiting for Operator",
+          recoveryPoints,
+          ...(unavailableRecoveryPoints.length === 0
+            ? {}
+            : { unavailableRecoveryPoints }),
+        },
+      };
+    },
+    restore({
+      request,
+      requestDigest,
+      recoveryPointId,
+      restoredAt,
+      replacementOffer,
+    }) {
+      const selected = availablePoints.find(
+        (point) => point.public.id === recoveryPointId,
+      );
+      if (selected === undefined) {
+        throw new Error("Restore recovery point is not verified and offered");
+      }
+      return durabilityRestorePrimary({
+        layout,
+        options,
+        selected,
+        request,
+        requestDigest,
+        restoredAt,
+        replacementOffer,
+      });
+    },
+    close() {},
+  };
+}
+
+function durabilityRestorePrimary({
+  layout,
+  options,
+  selected,
+  request,
+  requestDigest,
+  restoredAt,
+  replacementOffer,
+}) {
+  const lockDirectory = durabilityJoin(
+    options.recoveryRoot,
+    ".restore-activation-lock",
+  );
+  const activeDatabasePath = durabilityDatabasePath(options.primaryRoot);
+  const candidatePath = durabilityJoin(
+    options.primaryRoot,
+    `.restore-candidate-${durabilityRandomUUID()}.sqlite3`,
+  );
+  let candidate;
+  let lockAcquired = false;
+  try {
+    durabilityMkdirSync(lockDirectory);
+    lockAcquired = true;
+    durabilitySyncPath(options.recoveryRoot);
+    durabilityMkdirSync(options.primaryRoot, { recursive: true });
+    if (durabilityExistsSync(activeDatabasePath)) {
+      throw new Error("primary storage reappeared before Restore activation");
+    }
+    durabilityCopyFileSync(selected.generation.databasePath, candidatePath);
+    durabilityChmodSync(candidatePath, 0o600);
+    durabilitySyncPath(candidatePath);
+    candidate = new DurabilityDatabaseSync(candidatePath);
+    candidate.exec("PRAGMA synchronous=FULL");
+    candidate.exec("PRAGMA foreign_keys=ON");
+    for (const capsule of selected.tail) {
+      durabilityApplyCapsule(candidate, capsule, layout);
+    }
+    durabilityRecoverReceiptCapsules(candidate, layout);
+    const referencedArtifacts = candidate
+      .prepare(
+        `SELECT DISTINCT a.digest, a.size
+         FROM artifact_relationships ar
+         JOIN artifacts a ON a.digest = ar.artifact_digest
+         ORDER BY a.digest`,
+      )
+      .all();
+    for (const artifact of referencedArtifacts) {
+      const bytes = durabilityVerifyObject(layout.recoveryRoot, artifact);
+      durabilityPromoteObject(layout.primaryRoot, { ...artifact, bytes });
+    }
+    const before = durabilityReadState(candidate);
+    const metadata = durabilityReadMetadata(candidate);
+    if (
+      canonicalJson(before.cursor) !==
+        canonicalJson(selected.public.targetCursor) ||
+      Number(metadata.authorityEpoch) !== selected.public.authorityEpoch
+    ) {
+      throw new Error("Restore candidate does not match the selected recovery point");
+    }
+    const authorityEpoch = Number(metadata.authorityEpoch) + 1;
+    const pendingEffects = candidate
+      .prepare(
+        `SELECT effect_intent_id FROM effect_intents
+         WHERE disposition IN ('Pending', 'Active', 'Uncertain')
+         ORDER BY effect_intent_id`,
+      )
+      .all()
+      .map((row) => row.effect_intent_id);
+    const recoveryGate =
+      pendingEffects.length === 0 ? "Open" : "Reconciliation";
+    const receipt = {
+      status: "accepted",
+      requestId: request.requestId,
+      actionKind: "Restore",
+      recoveryPoint: selected.public.id,
+      cursor: structuredClone(before.cursor),
+      authorityEpoch,
+      recoveryGate,
+      restoredAt,
+    };
+
+    candidate.exec("BEGIN IMMEDIATE");
+    try {
+      candidate
+        .prepare("UPDATE metadata SET value = ? WHERE key = 'authorityEpoch'")
+        .run(String(authorityEpoch));
+      candidate
+        .prepare("UPDATE metadata SET value = ? WHERE key = 'recoveryGate'")
+        .run(pendingEffects.length === 0 ? "open" : "reconciliation");
+      candidate
+        .prepare(
+          `INSERT INTO recovery_activations
+             (request_id, request_digest, receipt_json,
+              source_recovery_point, source_manifest_digest, restored_at,
+              authority_epoch)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          request.requestId,
+          requestDigest,
+          canonicalJson(receipt),
+          selected.public.id,
+          selected.generation.manifest.manifestDigest,
+          restoredAt,
+          authorityEpoch,
+        );
+      candidate
+        .prepare(
+          `UPDATE recovery_effects SET status = 'LateEvidenceOnly'
+           WHERE status = 'Pending'`,
+        )
+        .run();
+      for (const effectIntentId of pendingEffects) {
+        candidate
+          .prepare(
+            `INSERT INTO recovery_effects
+               (effect_intent_id, authority_epoch, status)
+             VALUES (?, ?, 'Pending')`,
+          )
+          .run(effectIntentId, authorityEpoch);
+      }
+      candidate
+        .prepare(
+          `UPDATE operator_offers SET consumed_revision = revision
+           WHERE consumed_revision IS NULL`,
+        )
+        .run();
+      if (before.run === null) {
+        candidate
+          .prepare(
+            `INSERT INTO operator_offers
+               (offer, principal, revision, authority_epoch, action_kind,
+                constraints_json, consumed_revision)
+             VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+          )
+          .run(
+            replacementOffer.offer,
+            replacementOffer.principal,
+            before.cursor.revision,
+            authorityEpoch,
+            replacementOffer.actionKind,
+            canonicalJson(replacementOffer.constraints),
+          );
+      }
+      candidate.exec("COMMIT");
+    } catch (error) {
+      candidate.exec("ROLLBACK");
+      throw error;
+    }
+    if (
+      candidate.prepare("PRAGMA integrity_check").get().integrity_check !== "ok"
+    ) {
+      throw new Error("restored candidate failed SQLite integrity verification");
+    }
+    if (before.cursor.revision > 0) {
+      durabilityVerifyCommit(
+        candidate,
+        durabilityReadCapsules(layout),
+        before.cursor.commitId,
+        layout,
+      );
+    }
+    const verified = durabilityReadState(candidate);
+    if (
+      verified.authorityEpoch !== authorityEpoch ||
+      canonicalJson(verified.cursor) !== canonicalJson(before.cursor) ||
+      canonicalJson(verified.run) !== canonicalJson(before.run) ||
+      canonicalJson(verified.latestReceipt) !==
+        canonicalJson(before.latestReceipt)
+    ) {
+      throw new Error("restored candidate changed acknowledged Run state");
+    }
+    candidate.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    candidate.close();
+    candidate = undefined;
+    durabilitySyncPath(candidatePath);
+    durabilityRenameSync(candidatePath, activeDatabasePath);
+    durabilitySyncPath(options.primaryRoot);
+
+    const activated = durabilityOpenDatabase(options.primaryRoot);
+    try {
+      durabilityRecoverAndVerify(activated, layout);
+      const state = durabilityReadState(activated);
+      durabilityCreateGeneration(activated, layout);
+      return { receipt: structuredClone(receipt), state };
+    } finally {
+      activated.close();
+    }
+  } finally {
+    candidate?.close();
+    durabilityRmSync(candidatePath, { force: true });
+    durabilityRmSync(`${candidatePath}-wal`, { force: true });
+    durabilityRmSync(`${candidatePath}-shm`, { force: true });
+    if (lockAcquired) {
+      durabilityRmSync(lockDirectory, { recursive: true, force: true });
+      durabilitySyncPath(options.recoveryRoot);
+    }
+  }
 }
 
 function durabilityCapsulePath(layout, capsule) {
@@ -410,6 +1187,9 @@ function durabilityVerifyReceiptCapsule(capsule) {
   if (canonicalDigest(body) !== capsuleDigest) {
     throw new Error("recovery receipt capsule digest does not verify");
   }
+  durabilityRequireSecretReferenceGenerations(
+    capsule.configuration?.secretReferenceGenerations,
+  );
   if (
     capsule.format !== "openab.rejection-receipt/v1" ||
     canonicalJson(capsule.request.content) !==
@@ -482,12 +1262,21 @@ function durabilityApplyReceiptCapsule(
          FROM request_receipts WHERE request_id = ?`,
       )
       .get(capsule.request.id);
+    const recoveryActivation = database
+      .prepare(
+        `SELECT request_digest FROM recovery_activations
+         WHERE request_id = ?`,
+      )
+      .get(capsule.request.id);
+    const authoritativeDigest =
+      authoritativeRequest?.request_digest ??
+      recoveryActivation?.request_digest;
     const isConflict = capsule.conflictWithDigest !== null;
     if (isConflict) {
       if (
-        authoritativeRequest === undefined ||
-        authoritativeRequest.request_digest !== capsule.conflictWithDigest ||
-        authoritativeRequest.request_digest === capsule.request.digest
+        authoritativeDigest === undefined ||
+        authoritativeDigest !== capsule.conflictWithDigest ||
+        authoritativeDigest === capsule.request.digest
       ) {
         throw new Error(
           "request conflict receipt has no durable original request",
@@ -525,7 +1314,9 @@ function durabilityApplyReceiptCapsule(
       Number(metadata.authorityEpoch) !== capsule.authorityEpoch ||
       Number(metadata.schemaVersion) !== capsule.schemaVersion ||
       metadata.configurationRevision !== capsule.configuration.revision ||
-      metadata.effectiveConfigurationDigest !== capsule.configuration.digest
+      metadata.effectiveConfigurationDigest !== capsule.configuration.digest ||
+      metadata.secretReferenceGenerations !==
+        canonicalJson(capsule.configuration.secretReferenceGenerations)
     ) {
       throw new Error("rejection receipt authority or configuration is stale");
     }
@@ -608,7 +1399,12 @@ function durabilityVerifyRejectionReceipt(
   return capsule;
 }
 
-function durabilityApplyCapsule(database, capsule, transactionOpen = false) {
+function durabilityApplyCapsule(
+  database,
+  capsule,
+  layout,
+  transactionOpen = false,
+) {
   return durabilityUseWriterTransaction(database, transactionOpen, () => {
     durabilityVerifyCapsule(capsule);
     const existing = database
@@ -635,7 +1431,9 @@ function durabilityApplyCapsule(database, capsule, transactionOpen = false) {
       Number(metadata.authorityEpoch) !== capsule.authorityEpoch ||
       Number(metadata.schemaVersion) !== capsule.schemaVersion ||
       metadata.configurationRevision !== capsule.configuration.revision ||
-      metadata.effectiveConfigurationDigest !== capsule.configuration.digest
+      metadata.effectiveConfigurationDigest !== capsule.configuration.digest ||
+      metadata.secretReferenceGenerations !==
+        canonicalJson(capsule.configuration.secretReferenceGenerations)
     ) {
       throw new Error("recovery capsule authority or configuration is stale");
     }
@@ -646,12 +1444,20 @@ function durabilityApplyCapsule(database, capsule, transactionOpen = false) {
       offer === undefined ||
       offer.principal !== capsule.audit.principal ||
       offer.revision !== state.cursor.revision ||
+      offer.authorityEpoch !== capsule.authorityEpoch ||
       offer.actionKind !== capsule.audit.actionKind ||
       canonicalDigest(offer.constraints) !==
         capsule.authorization.offerConstraintsDigest ||
       offer.consumedRevision !== null
     ) {
       throw new Error("recovery capsule no longer has its authoritative offer");
+    }
+    for (const artifact of capsule.artifacts) {
+      const bytes = durabilityVerifyObject(layout.recoveryRoot, artifact);
+      durabilityPromoteObject(layout.primaryRoot, {
+        ...artifact,
+        bytes,
+      });
     }
 
     database
@@ -674,6 +1480,23 @@ function durabilityApplyCapsule(database, capsule, transactionOpen = false) {
         capsule.request.digest,
         capsule.capsuleDigest,
       );
+    for (const artifact of capsule.artifacts) {
+      database
+        .prepare("INSERT OR IGNORE INTO artifacts (digest, size) VALUES (?, ?)")
+        .run(artifact.digest, artifact.size);
+      const authoritativeArtifact = database
+        .prepare("SELECT size FROM artifacts WHERE digest = ?")
+        .get(artifact.digest);
+      if (authoritativeArtifact.size !== artifact.size) {
+        throw new Error("artifact identity has another authoritative size");
+      }
+      database
+        .prepare(
+          `INSERT INTO artifact_relationships
+             (commit_id, artifact_digest) VALUES (?, ?)`,
+        )
+        .run(capsule.commitId, artifact.digest);
+    }
     const run = capsule.mutations.run;
     database
       .prepare(
@@ -751,7 +1574,7 @@ function durabilityApplyCapsule(database, capsule, transactionOpen = false) {
   });
 }
 
-function durabilityVerifyCommit(database, capsules, commitId) {
+function durabilityVerifyCommit(database, capsules, commitId, layout) {
   const identity = database
     .prepare(
       `SELECT predecessor, revision, authority_epoch, schema_version,
@@ -831,6 +1654,21 @@ function durabilityVerifyCommit(database, capsules, commitId) {
   ) {
     throw new Error("authoritative Effect Intents differ from their capsule");
   }
+  const artifacts = database
+    .prepare(
+      `SELECT a.digest, a.size
+       FROM artifact_relationships ar
+       JOIN artifacts a ON a.digest = ar.artifact_digest
+       WHERE ar.commit_id = ? ORDER BY a.digest`,
+    )
+    .all(capsule.commitId);
+  if (canonicalJson(artifacts) !== canonicalJson(capsule.artifacts)) {
+    throw new Error("authoritative artifacts differ from their capsule");
+  }
+  for (const artifact of capsule.artifacts) {
+    durabilityVerifyObject(layout.primaryRoot, artifact);
+    durabilityVerifyObject(layout.recoveryRoot, artifact);
+  }
   const runRow = database
     .prepare(
       `SELECT run_id, objective, stage, condition, review_round, outcome,
@@ -871,6 +1709,7 @@ function durabilityVerifyCommit(database, capsules, commitId) {
     if (
       consumedOffer === undefined ||
       consumedOffer.consumedRevision !== capsule.revision ||
+      consumedOffer.authorityEpoch !== capsule.authorityEpoch ||
       consumedOffer.principal !== capsule.request.content.principal ||
       consumedOffer.actionKind !== capsule.request.content.action.kind ||
       canonicalDigest(consumedOffer.constraints) !==
@@ -893,7 +1732,7 @@ function durabilityRecoverAndVerify(
       throw new Error("multiple prepared recovery capsules require recovery");
     }
     if (prepared.length === 1) {
-      durabilityApplyCapsule(database, prepared[0], true);
+      durabilityApplyCapsule(database, prepared[0], layout, true);
     }
 
     const state = durabilityReadState(database);
@@ -902,7 +1741,7 @@ function durabilityRecoverAndVerify(
         throw new Error("genesis projection has an invalid commit identity");
       }
     } else {
-      durabilityVerifyCommit(database, capsules, state.cursor.commitId);
+      durabilityVerifyCommit(database, capsules, state.cursor.commitId, layout);
     }
     durabilityRecoverReceiptCapsules(database, layout, true);
   });
@@ -950,6 +1789,9 @@ function durabilityBuildCapsule(database, candidate) {
     configuration: {
       revision: metadata.configurationRevision,
       digest: metadata.effectiveConfigurationDigest,
+      secretReferenceGenerations: JSON.parse(
+        metadata.secretReferenceGenerations,
+      ),
     },
     request: {
       id: candidate.requestId,
@@ -968,6 +1810,9 @@ function durabilityBuildCapsule(database, candidate) {
     },
     audit: candidate.audit,
     effectIntents: candidate.effectIntents,
+    artifacts: candidate.artifacts
+      .map(({ digest, size }) => ({ digest, size }))
+      .sort((left, right) => left.digest.localeCompare(right.digest)),
   });
 }
 
@@ -980,6 +1825,9 @@ function durabilityBuildReceiptCapsule(database, candidate) {
     configuration: {
       revision: metadata.configurationRevision,
       digest: metadata.effectiveConfigurationDigest,
+      secretReferenceGenerations: JSON.parse(
+        metadata.secretReferenceGenerations,
+      ),
     },
     cursor: candidate.receipt.cursor,
     request: {
@@ -1015,6 +1863,12 @@ function durabilityCommitCandidate(
   transactionOpen = false,
 ) {
   return durabilityUseWriterTransaction(database, transactionOpen, () => {
+    const artifacts = durabilityNormalizeArtifacts(candidate.artifacts ?? []);
+    for (const artifact of artifacts) {
+      durabilityPromoteObject(layout.primaryRoot, artifact);
+      durabilityPromoteObject(layout.recoveryRoot, artifact);
+    }
+    candidate = { ...candidate, artifacts };
     let capsule;
     const existing = database
       .prepare(
@@ -1065,12 +1919,13 @@ function durabilityCommitCandidate(
           capsule,
         );
       }
-      durabilityApplyCapsule(database, capsule, true);
+      durabilityApplyCapsule(database, capsule, layout, true);
     }
     durabilityVerifyCommit(
       database,
       durabilityReadCapsules(layout),
       capsule.commitId,
+      layout,
     );
     return structuredClone(capsule.receipt);
   });
@@ -1096,6 +1951,15 @@ function durabilityRecordRejection(
          FROM request_receipts WHERE request_id = ?`,
       )
       .get(candidate.requestId);
+    const recoveryActivation = database
+      .prepare(
+        `SELECT request_digest FROM recovery_activations
+         WHERE request_id = ?`,
+      )
+      .get(candidate.requestId);
+    const authoritativeDigest =
+      authoritativeRequest?.request_digest ??
+      recoveryActivation?.request_digest;
     const isConflict = candidate.conflictWithDigest !== undefined;
     const existingAuthoritative =
       !isConflict &&
@@ -1103,10 +1967,10 @@ function durabilityRecordRejection(
       authoritativeRequest.disposition === "rejected";
     if (
       (!isConflict &&
-        authoritativeRequest !== undefined &&
+        authoritativeDigest !== undefined &&
         !existingAuthoritative) ||
       (isConflict &&
-        authoritativeRequest?.request_digest !== candidate.conflictWithDigest)
+        authoritativeDigest !== candidate.conflictWithDigest)
     ) {
       throw new Error("request identity already has another final disposition");
     }
@@ -1175,6 +2039,43 @@ function durabilityReceipt(
       layout,
       true,
     );
+    const recoveryActivation = database
+      .prepare(
+        `SELECT request_digest, receipt_json
+         FROM recovery_activations WHERE request_id = ?`,
+      )
+      .get(requestId);
+    if (recoveryActivation !== undefined) {
+      if (recoveryActivation.request_digest !== requestDigest) {
+        const conflict = database
+          .prepare(
+            `SELECT request_digest, receipt_json
+             FROM request_conflict_receipts
+             WHERE request_id = ? AND request_digest = ?`,
+          )
+          .get(requestId, requestDigest);
+        if (conflict !== undefined) {
+          durabilityVerifyRejectionReceipt(
+            database,
+            receiptCapsules,
+            requestId,
+            requestDigest,
+          );
+          return {
+            requestDigest: conflict.request_digest,
+            receipt: JSON.parse(conflict.receipt_json),
+          };
+        }
+        return {
+          conflictWithDigest: recoveryActivation.request_digest,
+          priorReceipt: JSON.parse(recoveryActivation.receipt_json),
+        };
+      }
+      return {
+        requestDigest: recoveryActivation.request_digest,
+        receipt: JSON.parse(recoveryActivation.receipt_json),
+      };
+    }
     const row = database
       .prepare(
         `SELECT request_digest, disposition, receipt_json, commit_id
@@ -1214,6 +2115,7 @@ function durabilityReceipt(
         database,
         durabilityReadCapsules(layout),
         row.commit_id,
+        layout,
       );
     } else if (row.disposition === "rejected") {
       durabilityVerifyRejectionReceipt(
@@ -1278,26 +2180,45 @@ export function openDurability(options) {
   ]) {
     requireNonEmptyString(options?.[field], field);
   }
-  const layout = durabilityRecoveryLayout(options.recoveryRoot);
+  durabilityRequireSecretReferenceGenerations(
+    options.secretReferenceGenerations,
+  );
+  const layout = durabilityRecoveryLayout(
+    options.recoveryRoot,
+    options.primaryRoot,
+  );
+  const databaseExisted = durabilityExistsSync(
+    durabilityDatabasePath(options.primaryRoot),
+  );
+  if (
+    !databaseExisted &&
+    durabilityReaddirSync(layout.generationsDirectory).length > 0
+  ) {
+    return durabilityRecoveryRequired(layout, options);
+  }
   const database = durabilityOpenDatabase(options.primaryRoot);
   try {
     durabilityInitialize(database, options);
     durabilityRecoverAndVerify(database, layout);
+    durabilityCreateGeneration(database, layout);
   } catch (error) {
     database.close();
     throw error;
   }
 
   return {
+    kind: "Open",
     inspect() {
       return durabilityReadState(database);
     },
 
     act(operation) {
-      return durabilityUseWriterTransaction(database, false, () => {
+      const result = durabilityUseWriterTransaction(database, false, () => {
         durabilityRecoverAndVerify(database, layout, true);
         return operation(durabilityOperations(database, layout));
       });
+      durabilityCreateGeneration(database, layout);
+      return result;
     },
 
     close() {
