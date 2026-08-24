@@ -71,6 +71,7 @@ test("contribution, conduct, and security terms preserve human accountability", 
   assert.match(pullRequestWorkflow, /required GitHub check is `Verify`/);
   assert.match(pullRequestWorkflow, /independent reviewer/i);
   assert.match(pullRequestWorkflow, /--json headRefOid/);
+  assert.match(pullRequestWorkflow, /--rebase --delete-branch/);
   assert.match(pullRequestWorkflow, /--match-head-commit/);
   assert.match(pullRequestWorkflow, /zero GitHub approvals/i);
 
@@ -82,6 +83,14 @@ test("contribution, conduct, and security terms preserve human accountability", 
 
   const continuousIntegration = read(".github/workflows/ci.yml");
   assert.match(continuousIntegration, /name: Verify/);
+  assert.match(
+    continuousIntegration,
+    /group: repository-ci-\$\{\{ github\.event_name \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.sha \}\}/,
+  );
+  assert.match(
+    continuousIntegration,
+    /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/,
+  );
   assert.match(continuousIntegration, /node scripts\/check-dco\.mjs/);
   assert.match(continuousIntegration, /npm run check:public -- --revision HEAD/);
 
