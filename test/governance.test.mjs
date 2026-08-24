@@ -104,3 +104,35 @@ test("contribution, conduct, and security terms preserve human accountability", 
   assert.match(security, /do not.*public issue/is);
   assert.match(security, /credentials.*Evidence Bundles/is);
 });
+
+test("Copilot review remains supplemental exact-head evidence", () => {
+  const pullRequestWorkflow = read("docs/agents/pull-request-workflow.md");
+  assert.match(pullRequestWorkflow, /supplemental Copilot code review/i);
+  assert.match(pullRequestWorkflow, /candidate head\s+is stable/i);
+  assert.match(
+    pullRequestWorkflow,
+    /changed head.*supersedes.*Copilot review/is,
+  );
+  assert.match(
+    pullRequestWorkflow,
+    /does\s+not replace.*`Verify`.*independent review.*maintainer/is,
+  );
+  assert.match(
+    pullRequestWorkflow,
+    /maintainer authorizes.*external action/is,
+  );
+  assert.doesNotMatch(
+    pullRequestWorkflow,
+    /Copilot (?:code )?review (?:is|becomes) (?:a )?(?:required|mandatory|hard)(?:\s+(?:approval|review|gate|check))?/i,
+  );
+
+  const pullRequestTemplate = read(".github/pull_request_template.md");
+  assert.match(pullRequestTemplate, /Supplemental Copilot review/);
+  assert.match(pullRequestTemplate, /Not requested.*reason.*Completed/is);
+  assert.match(pullRequestTemplate, /Exact reviewed head \(when completed\)/);
+  assert.match(pullRequestTemplate, /Copilot findings and dispositions/);
+  assert.doesNotMatch(pullRequestTemplate, /^- \[[ x]\].*Copilot/im);
+
+  const continuousIntegration = read(".github/workflows/ci.yml");
+  assert.doesNotMatch(continuousIntegration, /copilot/i);
+});
