@@ -132,11 +132,12 @@ const restored = await core.operator({
 Restore copies the selected verified generation into a candidate, applies and
 verifies its contiguous capsule tail and durable rejection receipts,
 reconstructs every referenced artifact from recovery CAS, and runs SQLite and
-domain integrity checks. Only then does it atomically activate the database.
-Activation increments the authority epoch, fences every capability from the
-earlier epoch, and records a durable Restore receipt. A failed activation
-leaves no authoritative database and can be retried only after the failure is
-observed and corrected.
+domain integrity checks. The fully verified candidate, including its incremented
+authority epoch and durable Restore receipt, must reach the recovery boundary as
+a new generation before the database is atomically activated. Activation fences
+every capability from the earlier epoch. A failed activation leaves no
+authoritative database and can be retried only after the failure is observed and
+corrected.
 
 Known pending, active, or uncertain Effect Intents are not dispatched,
 cancelled, or declared failed by Restore. They appear under an

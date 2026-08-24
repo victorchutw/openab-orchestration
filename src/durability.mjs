@@ -137,6 +137,26 @@ function durabilityRequireSecretReferenceGenerations(value) {
   return canonicalJson(value);
 }
 
+function durabilityMetadataConfigurationIdentity(metadata) {
+  return {
+    revision: metadata.configurationRevision,
+    digest: metadata.effectiveConfigurationDigest,
+    secretReferenceGenerations: JSON.parse(
+      metadata.secretReferenceGenerations,
+    ),
+  };
+}
+
+function durabilityOptionsConfigurationIdentity(options) {
+  return {
+    revision: options.configurationRevision,
+    digest: options.effectiveConfigurationDigest,
+    secretReferenceGenerations: structuredClone(
+      options.secretReferenceGenerations,
+    ),
+  };
+}
+
 function durabilitySyncPath(path) {
   const descriptor = durabilityOpenSync(path, "r");
   try {
@@ -495,6 +515,17 @@ function durabilityReadState(database) {
   };
 }
 
+function durabilityReadReferencedArtifacts(database) {
+  return database
+    .prepare(
+      `SELECT DISTINCT a.digest, a.size
+       FROM artifact_relationships ar
+       JOIN artifacts a ON a.digest = ar.artifact_digest
+       ORDER BY a.digest`,
+    )
+    .all();
+}
+
 function durabilitySealCapsule(body) {
   return { ...body, capsuleDigest: canonicalDigest(body) };
 }
@@ -618,19 +649,15 @@ function durabilityVerifyGenerationManifest(manifest) {
   if (manifest.format !== "openab.recovery-generation/v1") {
     throw new Error("recovery generation format is unsupported");
   }
+  durabilityRequireSecretReferenceGenerations(
+    manifest.configuration?.secretReferenceGenerations,
+  );
 }
 
 function durabilityCreateGeneration(database, layout) {
   const state = durabilityReadState(database);
   const metadata = durabilityReadMetadata(database);
-  const referencedArtifacts = database
-    .prepare(
-      `SELECT DISTINCT a.digest, a.size
-       FROM artifact_relationships ar
-       JOIN artifacts a ON a.digest = ar.artifact_digest
-       ORDER BY a.digest`,
-    )
-    .all();
+  const referencedArtifacts = durabilityReadReferencedArtifacts(database);
   const temporaryDirectory = durabilityJoin(
     layout.generationsDirectory,
     `.tmp-${durabilityRandomUUID()}`,
@@ -650,12 +677,8 @@ function durabilityCreateGeneration(database, layout) {
       cursor: state.cursor,
       authorityEpoch: Number(metadata.authorityEpoch),
       schemaVersion: Number(metadata.schemaVersion),
-      configurationRevision: metadata.configurationRevision,
-      effectiveConfigurationDigest: metadata.effectiveConfigurationDigest,
+      configuration: durabilityMetadataConfigurationIdentity(metadata),
       operatorIdentity: metadata.operatorIdentity,
-      secretReferenceGenerations: JSON.parse(
-        metadata.secretReferenceGenerations,
-      ),
       database: {
         size: databaseBytes.byteLength,
         digest: durabilityDigestBytes(databaseBytes),
@@ -723,23 +746,14 @@ function durabilityReadVerifiedGenerations(layout) {
           canonicalJson(state.cursor) !== canonicalJson(manifest.cursor) ||
           Number(metadata.authorityEpoch) !== manifest.authorityEpoch ||
           Number(metadata.schemaVersion) !== manifest.schemaVersion ||
-          metadata.configurationRevision !== manifest.configurationRevision ||
-          metadata.effectiveConfigurationDigest !==
-            manifest.effectiveConfigurationDigest ||
           metadata.operatorIdentity !== manifest.operatorIdentity ||
-          metadata.secretReferenceGenerations !==
-            canonicalJson(manifest.secretReferenceGenerations)
+          canonicalJson(durabilityMetadataConfigurationIdentity(metadata)) !==
+            canonicalJson(manifest.configuration)
         ) {
           throw new Error("recovery generation metadata does not verify");
         }
-        const referencedArtifacts = database
-          .prepare(
-            `SELECT DISTINCT a.digest, a.size
-             FROM artifact_relationships ar
-             JOIN artifacts a ON a.digest = ar.artifact_digest
-             ORDER BY a.digest`,
-          )
-          .all();
+        const referencedArtifacts =
+          durabilityReadReferencedArtifacts(database);
         if (
           canonicalJson(referencedArtifacts) !==
           canonicalJson(manifest.referencedArtifacts)
@@ -780,12 +794,8 @@ function durabilityBuildRecoveryPoint(generation, capsules, layout) {
       capsule.predecessor !== targetCursor.commitId ||
       capsule.authorityEpoch !== generation.manifest.authorityEpoch ||
       capsule.schemaVersion !== generation.manifest.schemaVersion ||
-      capsule.configuration.revision !==
-        generation.manifest.configurationRevision ||
-      capsule.configuration.digest !==
-        generation.manifest.effectiveConfigurationDigest ||
-      canonicalJson(capsule.configuration.secretReferenceGenerations) !==
-        canonicalJson(generation.manifest.secretReferenceGenerations)
+      canonicalJson(capsule.configuration) !==
+        canonicalJson(generation.manifest.configuration)
     ) {
       valid = false;
       break;
@@ -826,11 +836,11 @@ function durabilityBuildRecoveryPoint(generation, capsules, layout) {
       sourceCursor: structuredClone(generation.manifest.cursor),
       targetCursor: structuredClone(targetCursor),
       authorityEpoch: generation.manifest.authorityEpoch,
-      configurationRevision: generation.manifest.configurationRevision,
+      configurationRevision: generation.manifest.configuration.revision,
       effectiveConfigurationDigest:
-        generation.manifest.effectiveConfigurationDigest,
+        generation.manifest.configuration.digest,
       secretReferenceGenerations: structuredClone(
-        generation.manifest.secretReferenceGenerations,
+        generation.manifest.configuration.secretReferenceGenerations,
       ),
       capsuleTailLength: tail.length,
       referencedArtifactCount: referencedArtifacts.size,
@@ -840,16 +850,12 @@ function durabilityBuildRecoveryPoint(generation, capsules, layout) {
 
 function durabilityRecoveryRequired(layout, options) {
   const allVerified = durabilityReadVerifiedGenerations(layout);
+  const expectedConfiguration = durabilityOptionsConfigurationIdentity(options);
   const verified = allVerified.filter(
     ({ manifest }) =>
       manifest.operatorIdentity === options.operatorIdentity &&
-      manifest.configurationRevision === options.configurationRevision &&
-      manifest.effectiveConfigurationDigest ===
-        options.effectiveConfigurationDigest &&
-      canonicalJson(manifest.secretReferenceGenerations) ===
-        durabilityRequireSecretReferenceGenerations(
-          options.secretReferenceGenerations,
-        ),
+      canonicalJson(manifest.configuration) ===
+        canonicalJson(expectedConfiguration),
   );
   const capsules = durabilityReadCapsules(layout);
   const maximumAuthorityEpoch = Math.max(
@@ -893,11 +899,12 @@ function durabilityRecoveryRequired(layout, options) {
             sourceCursor: structuredClone(latestUnavailable.manifest.cursor),
             reason: "ConfigurationOrSecretGenerationUnavailable",
             requiredConfigurationRevision:
-              latestUnavailable.manifest.configurationRevision,
+              latestUnavailable.manifest.configuration.revision,
             requiredEffectiveConfigurationDigest:
-              latestUnavailable.manifest.effectiveConfigurationDigest,
+              latestUnavailable.manifest.configuration.digest,
             requiredSecretReferenceGenerations: structuredClone(
-              latestUnavailable.manifest.secretReferenceGenerations,
+              latestUnavailable.manifest.configuration
+                .secretReferenceGenerations,
             ),
           },
         ];
@@ -959,6 +966,35 @@ function durabilityRestorePrimary({
   restoredAt,
   replacementOffer,
 }) {
+  const currentRecoveryPoints = durabilityRecoveryRequired(
+    layout,
+    options,
+  ).inspect().recovery.recoveryPoints;
+  const selectedStillOffered = currentRecoveryPoints.some(
+    (point) => point.id === selected.public.id,
+  );
+  const verifiedGeneration = durabilityReadVerifiedGenerations(layout).find(
+    ({ manifest }) =>
+      manifest.manifestDigest === selected.generation.manifest.manifestDigest,
+  );
+  const verifiedPoint =
+    verifiedGeneration === undefined
+      ? null
+      : durabilityBuildRecoveryPoint(
+          verifiedGeneration,
+          durabilityReadCapsules(layout),
+          layout,
+        );
+  if (
+    !selectedStillOffered ||
+    verifiedPoint === null ||
+    canonicalJson(verifiedPoint.public) !== canonicalJson(selected.public)
+  ) {
+    throw new Error(
+      "recovery point changed after Observe and must be selected again",
+    );
+  }
+  selected = verifiedPoint;
   const lockDirectory = durabilityJoin(
     options.recoveryRoot,
     ".restore-activation-lock",
@@ -979,6 +1015,14 @@ function durabilityRestorePrimary({
       throw new Error("primary storage reappeared before Restore activation");
     }
     durabilityCopyFileSync(selected.generation.databasePath, candidatePath);
+    const candidateBytes = durabilityReadFileSync(candidatePath);
+    if (
+      candidateBytes.byteLength !== selected.generation.manifest.database.size ||
+      durabilityDigestBytes(candidateBytes) !==
+        selected.generation.manifest.database.digest
+    ) {
+      throw new Error("recovery point changed while rebuilding its candidate");
+    }
     durabilityChmodSync(candidatePath, 0o600);
     durabilitySyncPath(candidatePath);
     candidate = new DurabilityDatabaseSync(candidatePath);
@@ -988,14 +1032,7 @@ function durabilityRestorePrimary({
       durabilityApplyCapsule(candidate, capsule, layout);
     }
     durabilityRecoverReceiptCapsules(candidate, layout);
-    const referencedArtifacts = candidate
-      .prepare(
-        `SELECT DISTINCT a.digest, a.size
-         FROM artifact_relationships ar
-         JOIN artifacts a ON a.digest = ar.artifact_digest
-         ORDER BY a.digest`,
-      )
-      .all();
+    const referencedArtifacts = durabilityReadReferencedArtifacts(candidate);
     for (const artifact of referencedArtifacts) {
       const bytes = durabilityVerifyObject(layout.recoveryRoot, artifact);
       durabilityPromoteObject(layout.primaryRoot, { ...artifact, bytes });
@@ -1123,6 +1160,7 @@ function durabilityRestorePrimary({
       throw new Error("restored candidate changed acknowledged Run state");
     }
     candidate.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    durabilityCreateGeneration(candidate, layout);
     candidate.close();
     candidate = undefined;
     durabilitySyncPath(candidatePath);
@@ -1133,7 +1171,6 @@ function durabilityRestorePrimary({
     try {
       durabilityRecoverAndVerify(activated, layout);
       const state = durabilityReadState(activated);
-      durabilityCreateGeneration(activated, layout);
       return { receipt: structuredClone(receipt), state };
     } finally {
       activated.close();
@@ -1313,10 +1350,8 @@ function durabilityApplyReceiptCapsule(
     if (
       Number(metadata.authorityEpoch) !== capsule.authorityEpoch ||
       Number(metadata.schemaVersion) !== capsule.schemaVersion ||
-      metadata.configurationRevision !== capsule.configuration.revision ||
-      metadata.effectiveConfigurationDigest !== capsule.configuration.digest ||
-      metadata.secretReferenceGenerations !==
-        canonicalJson(capsule.configuration.secretReferenceGenerations)
+      canonicalJson(durabilityMetadataConfigurationIdentity(metadata)) !==
+        canonicalJson(capsule.configuration)
     ) {
       throw new Error("rejection receipt authority or configuration is stale");
     }
@@ -1430,10 +1465,8 @@ function durabilityApplyCapsule(
     if (
       Number(metadata.authorityEpoch) !== capsule.authorityEpoch ||
       Number(metadata.schemaVersion) !== capsule.schemaVersion ||
-      metadata.configurationRevision !== capsule.configuration.revision ||
-      metadata.effectiveConfigurationDigest !== capsule.configuration.digest ||
-      metadata.secretReferenceGenerations !==
-        canonicalJson(capsule.configuration.secretReferenceGenerations)
+      canonicalJson(durabilityMetadataConfigurationIdentity(metadata)) !==
+        canonicalJson(capsule.configuration)
     ) {
       throw new Error("recovery capsule authority or configuration is stale");
     }
@@ -1786,13 +1819,7 @@ function durabilityBuildCapsule(database, candidate) {
     revision: candidate.revision,
     authorityEpoch: Number(metadata.authorityEpoch),
     schemaVersion: Number(metadata.schemaVersion),
-    configuration: {
-      revision: metadata.configurationRevision,
-      digest: metadata.effectiveConfigurationDigest,
-      secretReferenceGenerations: JSON.parse(
-        metadata.secretReferenceGenerations,
-      ),
-    },
+    configuration: durabilityMetadataConfigurationIdentity(metadata),
     request: {
       id: candidate.requestId,
       digest: candidate.requestDigest,
@@ -1822,13 +1849,7 @@ function durabilityBuildReceiptCapsule(database, candidate) {
     format: "openab.rejection-receipt/v1",
     authorityEpoch: Number(metadata.authorityEpoch),
     schemaVersion: Number(metadata.schemaVersion),
-    configuration: {
-      revision: metadata.configurationRevision,
-      digest: metadata.effectiveConfigurationDigest,
-      secretReferenceGenerations: JSON.parse(
-        metadata.secretReferenceGenerations,
-      ),
-    },
+    configuration: durabilityMetadataConfigurationIdentity(metadata),
     cursor: candidate.receipt.cursor,
     request: {
       id: candidate.requestId,

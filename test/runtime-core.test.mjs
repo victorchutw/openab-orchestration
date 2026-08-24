@@ -774,6 +774,98 @@ test(
     }),
 );
 
+test("Restore re-verifies a selected generation if recovery changes after Observe", () =>
+  withAcceptedStorage(async ({ options, primaryRoot, recoveryRoot }) => {
+    rmSync(primaryRoot, { recursive: true });
+    const recoveryCore = openRuntimeCore(options);
+
+    try {
+      const observed = await recoveryCore.operator({
+        kind: "Observe",
+        principal: OPERATOR_ID,
+        locale: "en",
+      });
+      const generationsDirectory = join(recoveryRoot, "generations");
+      const selectedGeneration = readdirSync(generationsDirectory).sort().at(-1);
+      const manifestPath = join(
+        generationsDirectory,
+        selectedGeneration,
+        "manifest.json",
+      );
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      manifest.configuration.revision = "configuration:changed-after-observe";
+      chmodSync(manifestPath, 0o600);
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+
+      await assert.rejects(
+        recoveryCore.operator({
+          kind: "Act",
+          principal: OPERATOR_ID,
+          locale: "en",
+          requestId: "request:changed-recovery-set",
+          offer: observed.offers[0].offer,
+          action: {
+            kind: "Restore",
+            payload: {
+              recoveryPoint: observed.view.recovery.recoveryPoints[0].id,
+            },
+          },
+        }),
+        /recovery point changed after Observe/,
+      );
+      assert.equal(
+        existsSync(join(primaryRoot, "runtime-core.sqlite3")),
+        false,
+      );
+    } finally {
+      recoveryCore.close();
+    }
+  }));
+
+test(
+  "new authority epoch enters recovery storage before atomic activation",
+  { skip: process.platform === "win32" },
+  () =>
+    withAcceptedStorage(async ({ options, primaryRoot, recoveryRoot }) => {
+      rmSync(primaryRoot, { recursive: true });
+      const recoveryCore = openRuntimeCore(options);
+      const generationsDirectory = join(recoveryRoot, "generations");
+
+      try {
+        const observed = await recoveryCore.operator({
+          kind: "Observe",
+          principal: OPERATOR_ID,
+          locale: "en",
+        });
+        chmodSync(generationsDirectory, 0o500);
+
+        await assert.rejects(
+          recoveryCore.operator({
+            kind: "Act",
+            principal: OPERATOR_ID,
+            locale: "en",
+            requestId: "request:generation-before-activation",
+            offer: observed.offers[0].offer,
+            action: {
+              kind: "Restore",
+              payload: {
+                recoveryPoint: observed.view.recovery.recoveryPoints[0].id,
+              },
+            },
+          }),
+          (error) => error?.code === "EACCES",
+        );
+        assert.equal(
+          existsSync(join(primaryRoot, "runtime-core.sqlite3")),
+          false,
+        );
+      } finally {
+        chmodSync(generationsDirectory, 0o700);
+        recoveryCore.close();
+      }
+    }),
+);
+
 test("exact replay returns the original receipt without another transition", () =>
   withRuntimeCore(async ({ core }) => {
     const observed = await core.operator({
