@@ -70,7 +70,8 @@ test("contribution, conduct, and security terms preserve human accountability", 
   assert.match(pullRequestWorkflow, /Closes #<number>/);
   assert.match(pullRequestWorkflow, /required GitHub check is `Verify`/);
   assert.match(pullRequestWorkflow, /independent reviewer/i);
-  assert.match(pullRequestWorkflow, /gh pr merge --rebase --delete-branch/);
+  assert.match(pullRequestWorkflow, /--json headRefOid/);
+  assert.match(pullRequestWorkflow, /--match-head-commit/);
   assert.match(pullRequestWorkflow, /zero GitHub approvals/i);
 
   const pullRequestTemplate = read(".github/pull_request_template.md");

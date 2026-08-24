@@ -92,12 +92,23 @@ review evidence.
 
 Only the maintainer decides whether to mark the pull request ready and rebase
 merge it. Automated merge, deployment, release, and policy exceptions remain
-outside this workflow. When authorized, merge with:
+outside this workflow. When authorized, bind the operation to the exact
+reviewed head and reconcile it immediately before merging:
 
 ```bash
-gh pr merge --rebase --delete-branch
+reviewed_head="<exact-reviewed-head>"
+remote_head="$(gh pr view <number> \
+  --repo victorchutw/openab-orchestration \
+  --json headRefOid --jq .headRefOid)"
+test "$remote_head" = "$reviewed_head"
+gh pr merge <number> \
+  --repo victorchutw/openab-orchestration \
+  --rebase --delete-branch \
+  --match-head-commit "$reviewed_head"
 ```
 
+The comparison gives the maintainer an immediate observation; the
+`--match-head-commit` precondition also closes a race after that observation.
 Reconcile an uncertain merge before retrying. After a confirmed successful
 merge and required CI, refresh the issue queue as required by the bounded
 implementation loop.
