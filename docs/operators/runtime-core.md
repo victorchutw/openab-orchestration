@@ -141,6 +141,13 @@ every capability from the earlier epoch. A failed activation leaves no
 authoritative database and can be retried only after the failure is observed and
 corrected.
 
+The pre-activation generation does not make its accepted receipt externally
+final. A separate immutable completion record is written only after the atomic
+activation verifies. If activation is interrupted first, an exact replay of the
+same Restore request activates that prepared generation under the same authority
+epoch and then returns its receipt. Once completion is recorded, later exact
+replays are duplicates and a later primary loss requires a newly selected Restore.
+
 An `Act` that does not match the current Restore offer or one of its disclosed
 points receives a durable rejected receipt and the latest `RecoveryRequired`
 view. Exact retries return that receipt without adding another disposition.

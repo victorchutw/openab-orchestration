@@ -195,6 +195,20 @@ export function openRuntimeCore(rawOptions) {
           const requestDigest = operatorRequestDigest(request);
           const prior = durability.receipt(request.requestId, requestDigest);
           if (prior !== null) {
+            if (prior.pendingActivation !== undefined) {
+              const activation = durability.resume({
+                request,
+                requestDigest,
+              });
+              durability.close();
+              durability = openDurability(durabilityOptions);
+              return projectOperatorReply(
+                activation.state,
+                request.principal,
+                request.locale,
+                { status: "accepted", receipt: activation.receipt },
+              );
+            }
             if (prior.conflictWithDigest !== undefined) {
               const rejection = {
                 code: "RequestIdConflict",

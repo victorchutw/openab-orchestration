@@ -120,6 +120,236 @@ function rewriteGeneration(directory, { rewriteDatabase, rewriteManifest }) {
   chmodSync(manifestPath, 0o400);
 }
 
+function addConflictingGeneration(recoveryRoot) {
+  const generationsDirectory = join(recoveryRoot, "generations");
+  const sourceName = readdirSync(generationsDirectory).find((name) => {
+    const manifest = JSON.parse(
+      readFileSync(join(generationsDirectory, name, "manifest.json"), "utf8"),
+    );
+    return manifest.cursor.revision === 1;
+  });
+  const conflictingDirectory = join(
+    generationsDirectory,
+    "00000001-e1-conflicting-head",
+  );
+  cpSync(join(generationsDirectory, sourceName), conflictingDirectory, {
+    recursive: true,
+  });
+  const commitsDirectory = join(recoveryRoot, "commits");
+  const originalCapsule = JSON.parse(
+    readFileSync(
+      join(commitsDirectory, readdirSync(commitsDirectory)[0]),
+      "utf8",
+    ),
+  );
+  const conflictingCapsule = structuredClone(originalCapsule);
+  conflictingCapsule.commitId = "commit:conflicting-head";
+  conflictingCapsule.request.id = "request:conflicting-head";
+  conflictingCapsule.request.digest = canonicalDigest(
+    conflictingCapsule.request.content,
+  );
+  conflictingCapsule.receipt.requestId = conflictingCapsule.request.id;
+  conflictingCapsule.receipt.commitId = conflictingCapsule.commitId;
+  delete conflictingCapsule.capsuleDigest;
+  conflictingCapsule.capsuleDigest = capsuleDigest(conflictingCapsule);
+  writeFileSync(
+    join(commitsDirectory, "00000001-commit%3Aconflicting-head.json"),
+    `${JSON.stringify(canonicalize(conflictingCapsule))}\n`,
+  );
+  rewriteGeneration(conflictingDirectory, {
+    rewriteDatabase(database) {
+      database.exec("PRAGMA foreign_keys = OFF");
+      database.exec("DROP TRIGGER immutable_commit_identities_update");
+      database.exec("DROP TRIGGER immutable_request_receipts_update");
+      database.exec("DROP TRIGGER immutable_audit_records_update");
+      database
+        .prepare(
+          `UPDATE commit_identities
+           SET commit_id = ?, request_id = ?, request_digest = ?,
+               capsule_digest = ?
+           WHERE commit_id = ?`,
+        )
+        .run(
+          conflictingCapsule.commitId,
+          conflictingCapsule.request.id,
+          conflictingCapsule.request.digest,
+          conflictingCapsule.capsuleDigest,
+          originalCapsule.commitId,
+        );
+      database
+        .prepare(
+          `UPDATE request_receipts
+           SET request_id = ?, request_digest = ?, receipt_json = ?,
+               commit_id = ?, receipt_capsule_digest = ?
+           WHERE commit_id = ?`,
+        )
+        .run(
+          conflictingCapsule.request.id,
+          conflictingCapsule.request.digest,
+          JSON.stringify(canonicalize(conflictingCapsule.receipt)),
+          conflictingCapsule.commitId,
+          conflictingCapsule.capsuleDigest,
+          originalCapsule.commitId,
+        );
+      database
+        .prepare("UPDATE audit_records SET commit_id = ? WHERE commit_id = ?")
+        .run(conflictingCapsule.commitId, originalCapsule.commitId);
+      database
+        .prepare("UPDATE effect_intents SET commit_id = ? WHERE commit_id = ?")
+        .run(conflictingCapsule.commitId, originalCapsule.commitId);
+      database
+        .prepare(
+          "UPDATE current_projection SET commit_id = ? WHERE singleton = 1",
+        )
+        .run(conflictingCapsule.commitId);
+      database.exec("PRAGMA foreign_keys = ON");
+      assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
+    },
+    rewriteManifest(manifest) {
+      manifest.cursor.commitId = conflictingCapsule.commitId;
+    },
+  });
+}
+
+function addSecondRevisionGeneration(recoveryRoot) {
+  const generationsDirectory = join(recoveryRoot, "generations");
+  const sourceName = readdirSync(generationsDirectory).find((name) => {
+    const manifest = JSON.parse(
+      readFileSync(join(generationsDirectory, name, "manifest.json"), "utf8"),
+    );
+    return manifest.cursor.revision === 1;
+  });
+  const secondDirectory = join(
+    generationsDirectory,
+    "00000002-e1-canonical-head",
+  );
+  cpSync(join(generationsDirectory, sourceName), secondDirectory, {
+    recursive: true,
+  });
+  const commitsDirectory = join(recoveryRoot, "commits");
+  const originalCapsule = JSON.parse(
+    readFileSync(
+      join(commitsDirectory, readdirSync(commitsDirectory)[0]),
+      "utf8",
+    ),
+  );
+  const secondCapsule = structuredClone(originalCapsule);
+  secondCapsule.commitId = "commit:canonical-head-2";
+  secondCapsule.predecessor = originalCapsule.commitId;
+  secondCapsule.revision = 2;
+  secondCapsule.request.id = "request:canonical-head-2";
+  secondCapsule.request.content.action.payload.objective =
+    "Canonical second revision";
+  secondCapsule.request.digest = canonicalDigest(secondCapsule.request.content);
+  secondCapsule.receipt.requestId = secondCapsule.request.id;
+  secondCapsule.receipt.commitId = secondCapsule.commitId;
+  secondCapsule.receipt.revision = secondCapsule.revision;
+  secondCapsule.receipt.runId = "run:canonical-head-2";
+  secondCapsule.mutations.run = {
+    ...secondCapsule.mutations.run,
+    id: secondCapsule.receipt.runId,
+    objective: secondCapsule.request.content.action.payload.objective,
+  };
+  secondCapsule.audit.runId = secondCapsule.receipt.runId;
+  secondCapsule.effectIntents = [];
+  delete secondCapsule.capsuleDigest;
+  secondCapsule.capsuleDigest = capsuleDigest(secondCapsule);
+  writeFileSync(
+    join(commitsDirectory, "00000002-commit%3Acanonical-head-2.json"),
+    `${JSON.stringify(canonicalize(secondCapsule))}\n`,
+  );
+  rewriteGeneration(secondDirectory, {
+    rewriteDatabase(database) {
+      database
+        .prepare(
+          `INSERT INTO commit_identities
+             (commit_id, predecessor, revision, authority_epoch,
+              schema_version, configuration_revision, configuration_digest,
+              request_id, request_digest, capsule_digest)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          secondCapsule.commitId,
+          secondCapsule.predecessor,
+          secondCapsule.revision,
+          secondCapsule.authorityEpoch,
+          secondCapsule.schemaVersion,
+          secondCapsule.configuration.revision,
+          secondCapsule.configuration.digest,
+          secondCapsule.request.id,
+          secondCapsule.request.digest,
+          secondCapsule.capsuleDigest,
+        );
+      database
+        .prepare(
+          `INSERT INTO runs
+             (run_id, objective, stage, condition, review_round, outcome,
+              created_at, created_revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          secondCapsule.mutations.run.id,
+          secondCapsule.mutations.run.objective,
+          secondCapsule.mutations.run.stage,
+          secondCapsule.mutations.run.condition,
+          secondCapsule.mutations.run.reviewRound,
+          secondCapsule.mutations.run.outcome,
+          secondCapsule.mutations.run.createdAt,
+          secondCapsule.revision,
+        );
+      database
+        .prepare(
+          `INSERT INTO request_receipts
+             (request_id, request_digest, disposition, receipt_json,
+              commit_id, receipt_capsule_digest)
+           VALUES (?, ?, 'accepted', ?, ?, ?)`,
+        )
+        .run(
+          secondCapsule.request.id,
+          secondCapsule.request.digest,
+          JSON.stringify(canonicalize(secondCapsule.receipt)),
+          secondCapsule.commitId,
+          secondCapsule.capsuleDigest,
+        );
+      database
+        .prepare(
+          `INSERT INTO audit_records
+             (revision, commit_id, transition_kind, record_json)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run(
+          secondCapsule.revision,
+          secondCapsule.commitId,
+          secondCapsule.audit.actionKind,
+          JSON.stringify(canonicalize(secondCapsule.audit)),
+        );
+      database
+        .prepare(
+          "UPDATE operator_offers SET consumed_revision = ? WHERE offer = ?",
+        )
+        .run(secondCapsule.revision, secondCapsule.mutations.consumedOffer);
+      database
+        .prepare(
+          `UPDATE current_projection
+           SET revision = ?, commit_id = ?, run_json = ?
+           WHERE singleton = 1`,
+        )
+        .run(
+          secondCapsule.revision,
+          secondCapsule.commitId,
+          JSON.stringify(canonicalize(secondCapsule.mutations.run)),
+        );
+      assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
+    },
+    rewriteManifest(manifest) {
+      manifest.cursor = {
+        revision: secondCapsule.revision,
+        commitId: secondCapsule.commitId,
+      };
+    },
+  });
+}
+
 async function withAcceptedStorage(testBody) {
   const root = mkdtempSync(join(tmpdir(), "openab-runtime-integrity-"));
   const primaryRoot = join(root, "primary");
@@ -456,94 +686,19 @@ test("an unavailable highest authority epoch never offers a matching older epoch
 test("conflicting heads in the highest authority epoch fail closed", () =>
   withAcceptedStorage(async ({ options, primaryRoot, recoveryRoot }) => {
     rmSync(primaryRoot, { recursive: true });
-    const generationsDirectory = join(recoveryRoot, "generations");
-    const sourceName = readdirSync(generationsDirectory).find((name) => {
-      const manifest = JSON.parse(
-        readFileSync(join(generationsDirectory, name, "manifest.json"), "utf8"),
-      );
-      return manifest.cursor.revision === 1;
-    });
-    const conflictingDirectory = join(
-      generationsDirectory,
-      "00000001-e1-conflicting-head",
+    addConflictingGeneration(recoveryRoot);
+
+    assert.throws(
+      () => openRuntimeCore(options),
+      /conflicting authoritative recovery heads/,
     );
-    cpSync(join(generationsDirectory, sourceName), conflictingDirectory, {
-      recursive: true,
-    });
-    const commitsDirectory = join(recoveryRoot, "commits");
-    const originalCapsule = JSON.parse(
-      readFileSync(
-        join(commitsDirectory, readdirSync(commitsDirectory)[0]),
-        "utf8",
-      ),
-    );
-    const conflictingCapsule = structuredClone(originalCapsule);
-    conflictingCapsule.commitId = "commit:conflicting-head";
-    conflictingCapsule.request.id = "request:conflicting-head";
-    conflictingCapsule.request.digest = canonicalDigest(
-      conflictingCapsule.request.content,
-    );
-    conflictingCapsule.receipt.requestId = conflictingCapsule.request.id;
-    conflictingCapsule.receipt.commitId = conflictingCapsule.commitId;
-    delete conflictingCapsule.capsuleDigest;
-    conflictingCapsule.capsuleDigest = capsuleDigest(conflictingCapsule);
-    writeFileSync(
-      join(commitsDirectory, "00000001-commit%3Aconflicting-head.json"),
-      `${JSON.stringify(canonicalize(conflictingCapsule))}\n`,
-    );
-    rewriteGeneration(conflictingDirectory, {
-      rewriteDatabase(database) {
-        database.exec("PRAGMA foreign_keys = OFF");
-        database.exec("DROP TRIGGER immutable_commit_identities_update");
-        database.exec("DROP TRIGGER immutable_request_receipts_update");
-        database.exec("DROP TRIGGER immutable_audit_records_update");
-        database
-          .prepare(
-            `UPDATE commit_identities
-             SET commit_id = ?, request_id = ?, request_digest = ?,
-                 capsule_digest = ?
-             WHERE commit_id = ?`,
-          )
-          .run(
-            conflictingCapsule.commitId,
-            conflictingCapsule.request.id,
-            conflictingCapsule.request.digest,
-            conflictingCapsule.capsuleDigest,
-            originalCapsule.commitId,
-          );
-        database
-          .prepare(
-            `UPDATE request_receipts
-             SET request_id = ?, request_digest = ?, receipt_json = ?,
-                 commit_id = ?, receipt_capsule_digest = ?
-             WHERE commit_id = ?`,
-          )
-          .run(
-            conflictingCapsule.request.id,
-            conflictingCapsule.request.digest,
-            JSON.stringify(canonicalize(conflictingCapsule.receipt)),
-            conflictingCapsule.commitId,
-            conflictingCapsule.capsuleDigest,
-            originalCapsule.commitId,
-          );
-        database
-          .prepare("UPDATE audit_records SET commit_id = ? WHERE commit_id = ?")
-          .run(conflictingCapsule.commitId, originalCapsule.commitId);
-        database
-          .prepare("UPDATE effect_intents SET commit_id = ? WHERE commit_id = ?")
-          .run(conflictingCapsule.commitId, originalCapsule.commitId);
-        database
-          .prepare(
-            "UPDATE current_projection SET commit_id = ? WHERE singleton = 1",
-          )
-          .run(conflictingCapsule.commitId);
-        database.exec("PRAGMA foreign_keys = ON");
-        assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
-      },
-      rewriteManifest(manifest) {
-        manifest.cursor.commitId = conflictingCapsule.commitId;
-      },
-    });
+  }));
+
+test("a lower-revision fork in the highest authority epoch fails closed", () =>
+  withAcceptedStorage(async ({ options, primaryRoot, recoveryRoot }) => {
+    rmSync(primaryRoot, { recursive: true });
+    addSecondRevisionGeneration(recoveryRoot);
+    addConflictingGeneration(recoveryRoot);
 
     assert.throws(
       () => openRuntimeCore(options),
@@ -700,7 +855,7 @@ test("Restore fences capabilities from the earlier authority epoch", async () =>
 });
 
 test("Restore atomically activates the acknowledged Run under a new authority epoch", () =>
-  withAcceptedStorage(async ({ options, primaryRoot, accepted }) => {
+  withAcceptedStorage(async ({ options, primaryRoot, recoveryRoot, accepted }) => {
     rmSync(primaryRoot, { recursive: true });
     let recoveryCore = openRuntimeCore(options);
 
@@ -756,6 +911,21 @@ test("Restore atomically activates the acknowledged Run under a new authority ep
         existsSync(join(primaryRoot, "runtime-core.sqlite3")),
         true,
       );
+      assert.equal(
+        readdirSync(join(recoveryRoot, "activation-completions")).length,
+        1,
+      );
+
+      recoveryCore.close();
+      rmSync(primaryRoot, { recursive: true });
+      recoveryCore = openRuntimeCore(options);
+      const completedReplay = await recoveryCore.operator(request);
+      assert.equal(completedReplay.status, "duplicate");
+      assert.deepEqual(completedReplay.receipt, restored.receipt);
+      assert.equal(
+        existsSync(join(primaryRoot, "runtime-core.sqlite3")),
+        false,
+      );
 
       recoveryCore.close();
       recoveryCore = openRuntimeCore(options);
@@ -764,7 +934,7 @@ test("Restore atomically activates the acknowledged Run under a new authority ep
       assert.deepEqual(replayed.receipt, restored.receipt);
       assert.deepEqual(replayed.cursor, accepted.cursor);
       assert.equal(replayed.view.authorityEpoch, 2);
-      assert.deepEqual(replayed.view.recovery, restored.view.recovery);
+      assert.deepEqual(replayed.view.recovery, completedReplay.view.recovery);
 
       const conflicting = await recoveryCore.operator({
         ...request,
@@ -1311,21 +1481,15 @@ test("an interruption after generation durability cannot expose a partial activa
       });
       assert.equal(reconnected.view.authorityEpoch, 2);
       assert.deepEqual(reconnected.cursor, accepted.cursor);
-      const restored = await recoveryCore.operator({
-        kind: "Act",
-        principal: OPERATOR_ID,
-        locale: "en",
-        requestId: "request:activate-after-obstruction",
-        offer: reconnected.offers[0].offer,
-        action: {
-          kind: "Restore",
-          payload: {
-            recoveryPoint: reconnected.view.recovery.recoveryPoints[0].id,
-          },
-        },
-      });
-      assert.equal(restored.view.authorityEpoch, 3);
+      const restored = await recoveryCore.operator(request);
+      assert.equal(restored.status, "accepted");
+      assert.equal(restored.receipt.requestId, request.requestId);
+      assert.equal(restored.view.authorityEpoch, 2);
       assert.deepEqual(restored.cursor, accepted.cursor);
+      assert.equal(
+        existsSync(join(primaryRoot, "runtime-core.sqlite3")),
+        true,
+      );
     } finally {
       await worker.terminate();
       recoveryCore.close();

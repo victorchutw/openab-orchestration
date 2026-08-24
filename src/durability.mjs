@@ -606,6 +606,10 @@ function durabilityRecoveryLayout(recoveryRoot, primaryRoot) {
   const commitsDirectory = durabilityJoin(recoveryRoot, "commits");
   const receiptsDirectory = durabilityJoin(recoveryRoot, "receipts");
   const generationsDirectory = durabilityJoin(recoveryRoot, "generations");
+  const activationCompletionsDirectory = durabilityJoin(
+    recoveryRoot,
+    "activation-completions",
+  );
   const commitsCreated = durabilityMkdirSync(commitsDirectory, {
     recursive: true,
   });
@@ -615,10 +619,15 @@ function durabilityRecoveryLayout(recoveryRoot, primaryRoot) {
   const generationsCreated = durabilityMkdirSync(generationsDirectory, {
     recursive: true,
   });
+  const activationCompletionsCreated = durabilityMkdirSync(
+    activationCompletionsDirectory,
+    { recursive: true },
+  );
   if (
     commitsCreated !== undefined ||
     receiptsCreated !== undefined ||
-    generationsCreated !== undefined
+    generationsCreated !== undefined ||
+    activationCompletionsCreated !== undefined
   ) {
     durabilitySyncPath(recoveryRoot);
   }
@@ -626,6 +635,7 @@ function durabilityRecoveryLayout(recoveryRoot, primaryRoot) {
     commitsDirectory,
     receiptsDirectory,
     generationsDirectory,
+    activationCompletionsDirectory,
     primaryRoot,
     recoveryRoot,
   };
@@ -633,6 +643,85 @@ function durabilityRecoveryLayout(recoveryRoot, primaryRoot) {
 
 function durabilitySealGeneration(body) {
   return { ...body, manifestDigest: canonicalDigest(body) };
+}
+
+function durabilitySealActivationCompletion(body) {
+  return { ...body, completionDigest: canonicalDigest(body) };
+}
+
+function durabilityActivationCompletionPath(layout, manifest) {
+  return durabilityJoin(
+    layout.activationCompletionsDirectory,
+    `${manifest.manifestDigest.slice("sha256:".length)}.json`,
+  );
+}
+
+function durabilityVerifyActivationCompletion(completion, manifest, activation) {
+  const { completionDigest, ...body } = completion;
+  if (
+    canonicalDigest(body) !== completionDigest ||
+    completion.format !== "openab.restore-activation-completion/v1" ||
+    completion.generationManifestDigest !== manifest.manifestDigest ||
+    completion.authorityEpoch !== manifest.authorityEpoch ||
+    completion.requestId !== activation.requestId ||
+    completion.requestDigest !== activation.requestDigest ||
+    completion.receiptDigest !== canonicalDigest(activation.receipt)
+  ) {
+    throw new Error("Restore activation completion does not verify");
+  }
+}
+
+function durabilityRecordActivationCompletion(layout, generation, activation) {
+  const completion = durabilitySealActivationCompletion({
+    format: "openab.restore-activation-completion/v1",
+    generationManifestDigest: generation.manifest.manifestDigest,
+    authorityEpoch: generation.manifest.authorityEpoch,
+    requestId: activation.requestId,
+    requestDigest: activation.requestDigest,
+    receiptDigest: canonicalDigest(activation.receipt),
+  });
+  const path = durabilityActivationCompletionPath(
+    layout,
+    generation.manifest,
+  );
+  if (durabilityExistsSync(path)) {
+    const existing = JSON.parse(durabilityReadFileSync(path, "utf8"));
+    durabilityVerifyActivationCompletion(
+      existing,
+      generation.manifest,
+      activation,
+    );
+    return;
+  }
+  durabilityWriteImmutableJson(
+    path,
+    layout.activationCompletionsDirectory,
+    completion,
+  );
+}
+
+function durabilityRecordCurrentActivationCompletion(
+  database,
+  layout,
+  generation,
+) {
+  const row = database
+    .prepare(
+      `SELECT request_id, request_digest, receipt_json, authority_epoch
+       FROM recovery_activations ORDER BY authority_epoch DESC LIMIT 1`,
+    )
+    .get();
+  if (
+    row === undefined ||
+    row.authority_epoch !== generation.manifest.authorityEpoch
+  ) {
+    return;
+  }
+  durabilityRecordActivationCompletion(layout, generation, {
+    requestId: row.request_id,
+    requestDigest: row.request_digest,
+    receipt: JSON.parse(row.receipt_json),
+  });
 }
 
 function durabilityGenerationDirectoryName(manifest) {
@@ -698,10 +787,19 @@ function durabilityCreateGeneration(database, layout) {
     );
     if (durabilityExistsSync(finalDirectory)) {
       durabilityRmSync(temporaryDirectory, { recursive: true });
-      return;
+      return {
+        directory: finalDirectory,
+        databasePath: durabilityJoin(finalDirectory, "runtime-core.sqlite3"),
+        manifest,
+      };
     }
     durabilityRenameSync(temporaryDirectory, finalDirectory);
     durabilitySyncPath(layout.generationsDirectory);
+    return {
+      directory: finalDirectory,
+      databasePath: durabilityJoin(finalDirectory, "runtime-core.sqlite3"),
+      manifest,
+    };
   } catch (error) {
     durabilityRmSync(temporaryDirectory, { recursive: true, force: true });
     throw error;
@@ -736,6 +834,8 @@ function durabilityReadVerifiedGenerations(layout) {
       const database = new DurabilityDatabaseSync(databasePath, {
         readOnly: true,
       });
+      let history;
+      let activation = null;
       try {
         if (
           database.prepare("PRAGMA integrity_check").get().integrity_check !==
@@ -746,8 +846,28 @@ function durabilityReadVerifiedGenerations(layout) {
         }
         const state = durabilityReadState(database);
         const metadata = durabilityReadMetadata(database);
+        history = database
+          .prepare(
+            `SELECT commit_id, predecessor, revision
+             FROM commit_identities ORDER BY revision`,
+          )
+          .all();
+        let predecessor = DURABILITY_GENESIS_COMMIT_ID;
+        let revision = 0;
+        for (const commit of history) {
+          if (
+            commit.revision !== revision + 1 ||
+            commit.predecessor !== predecessor
+          ) {
+            throw new Error("recovery generation history is not contiguous");
+          }
+          predecessor = commit.commit_id;
+          revision = commit.revision;
+        }
         if (
           canonicalJson(state.cursor) !== canonicalJson(manifest.cursor) ||
+          state.cursor.revision !== revision ||
+          state.cursor.commitId !== predecessor ||
           Number(metadata.authorityEpoch) !== manifest.authorityEpoch ||
           Number(metadata.schemaVersion) !== manifest.schemaVersion ||
           metadata.operatorIdentity !== manifest.operatorIdentity ||
@@ -767,10 +887,62 @@ function durabilityReadVerifiedGenerations(layout) {
         for (const artifact of manifest.referencedArtifacts) {
           durabilityVerifyObject(layout.recoveryRoot, artifact);
         }
+        const activationRow = database
+          .prepare(
+            `SELECT request_id, request_digest, receipt_json, authority_epoch
+             FROM recovery_activations
+             ORDER BY authority_epoch DESC LIMIT 1`,
+          )
+          .get();
+        if (
+          activationRow !== undefined &&
+          activationRow.authority_epoch === manifest.authorityEpoch
+        ) {
+          activation = {
+            requestId: activationRow.request_id,
+            requestDigest: activationRow.request_digest,
+            receipt: JSON.parse(activationRow.receipt_json),
+          };
+          if (
+            activation.receipt.status !== "accepted" ||
+            activation.receipt.requestId !== activation.requestId ||
+            activation.receipt.actionKind !== "Restore" ||
+            activation.receipt.authorityEpoch !== manifest.authorityEpoch ||
+            canonicalJson(activation.receipt.cursor) !==
+              canonicalJson(state.cursor)
+          ) {
+            throw new Error("recovery generation Restore receipt is invalid");
+          }
+        }
       } finally {
         database.close();
       }
-      generations.push({ directory, databasePath, manifest });
+      let activationCompleted = false;
+      if (activation !== null) {
+        const completionPath = durabilityActivationCompletionPath(
+          layout,
+          manifest,
+        );
+        if (durabilityExistsSync(completionPath)) {
+          const completion = JSON.parse(
+            durabilityReadFileSync(completionPath, "utf8"),
+          );
+          durabilityVerifyActivationCompletion(
+            completion,
+            manifest,
+            activation,
+          );
+          activationCompleted = true;
+        }
+      }
+      generations.push({
+        directory,
+        databasePath,
+        manifest,
+        history,
+        activation,
+        activationCompleted,
+      });
     } catch {
       // A corrupt or incomplete generation is not offered for restore.
     }
@@ -889,6 +1061,28 @@ function durabilityAnalyzeRecovery(layout, options) {
   if (authoritativeHeads.size > 1) {
     throw new Error("recovery has conflicting authoritative recovery heads");
   }
+  const authoritativePoint = authoritativePoints[0];
+  if (authoritativePoint !== undefined) {
+    const authoritativeHistory = new Map([
+      [0, DURABILITY_GENESIS_COMMIT_ID],
+      ...authoritativePoint.generation.history.map((commit) => [
+        commit.revision,
+        commit.commit_id,
+      ]),
+      ...authoritativePoint.tail.map((capsule) => [
+        capsule.revision,
+        capsule.commitId,
+      ]),
+    ]);
+    for (const generation of highestEpochGenerations) {
+      if (
+        authoritativeHistory.get(generation.manifest.cursor.revision) !==
+        generation.manifest.cursor.commitId
+      ) {
+        throw new Error("recovery has conflicting authoritative recovery heads");
+      }
+    }
+  }
   const authoritativeConfigurations = new Set(
     authoritativePoints.map((point) =>
       canonicalJson(point.generation.manifest.configuration),
@@ -928,7 +1122,6 @@ function durabilityAnalyzeRecovery(layout, options) {
             ),
           },
         ];
-  const authoritativePoint = authoritativePoints[0];
   return {
     availablePoints,
     authoritativePoints,
@@ -988,12 +1181,9 @@ function durabilityReadRecoveryRequest(layout, analysis, requestId, requestDiges
         ...database
           .prepare(
             `SELECT request_digest, receipt_json
-             FROM request_receipts WHERE request_id = ?
-             UNION ALL
-             SELECT request_digest, receipt_json
-             FROM recovery_activations WHERE request_id = ?`,
+             FROM request_receipts WHERE request_id = ?`,
           )
-          .all(requestId, requestId)
+          .all(requestId)
           .map((row) => ({
             requestDigest: row.request_digest,
             receipt: JSON.parse(row.receipt_json),
@@ -1001,6 +1191,24 @@ function durabilityReadRecoveryRequest(layout, analysis, requestId, requestDiges
       );
     } finally {
       database.close();
+    }
+    const activation = point.generation.activation;
+    if (activation?.requestId === requestId) {
+      if (
+        activation.requestDigest === requestDigest &&
+        !point.generation.activationCompleted
+      ) {
+        return {
+          pendingActivation: {
+            requestDigest: activation.requestDigest,
+            receipt: structuredClone(activation.receipt),
+          },
+        };
+      }
+      identities.push({
+        requestDigest: activation.requestDigest,
+        receipt: activation.receipt,
+      });
     }
     const tailCapsule = point.tail.find(
       (capsule) => capsule.request.id === requestId,
@@ -1112,6 +1320,14 @@ function durabilityRecoveryRequired(layout, options) {
     reject(candidate) {
       return durabilityRejectRecovery(layout, analysis, candidate);
     },
+    resume({ request, requestDigest }) {
+      return durabilityResumePrimary({
+        layout,
+        options,
+        request,
+        requestDigest,
+      });
+    },
     restore({
       request,
       requestDigest,
@@ -1137,6 +1353,122 @@ function durabilityRecoveryRequired(layout, options) {
     },
     close() {},
   };
+}
+
+function durabilityResumePrimary({ layout, options, request, requestDigest }) {
+  const analysis = durabilityAnalyzeRecovery(layout, options);
+  const selected = analysis.availablePoints.find(
+    (point) =>
+      point.generation.activation?.requestId === request.requestId &&
+      point.generation.activation.requestDigest === requestDigest &&
+      !point.generation.activationCompleted,
+  );
+  if (selected === undefined) {
+    throw new Error("prepared Restore activation is no longer resumable");
+  }
+  const receipt = selected.generation.activation.receipt;
+  if (
+    canonicalJson(receipt.cursor) !==
+      canonicalJson(selected.public.targetCursor) ||
+    receipt.authorityEpoch !== selected.public.authorityEpoch
+  ) {
+    throw new Error("prepared Restore receipt does not match its recovery head");
+  }
+
+  const lockDirectory = durabilityJoin(
+    options.recoveryRoot,
+    ".restore-activation-lock",
+  );
+  const activeDatabasePath = durabilityDatabasePath(options.primaryRoot);
+  const candidatePath = durabilityJoin(
+    options.primaryRoot,
+    `.restore-candidate-${durabilityRandomUUID()}.sqlite3`,
+  );
+  let candidate;
+  let lockAcquired = false;
+  try {
+    durabilityMkdirSync(lockDirectory);
+    lockAcquired = true;
+    durabilitySyncPath(options.recoveryRoot);
+    durabilityMkdirSync(options.primaryRoot, { recursive: true });
+    if (durabilityExistsSync(activeDatabasePath)) {
+      throw new Error("primary storage reappeared before Restore activation");
+    }
+    durabilityCopyFileSync(selected.generation.databasePath, candidatePath);
+    const candidateBytes = durabilityReadFileSync(candidatePath);
+    if (
+      candidateBytes.byteLength !== selected.generation.manifest.database.size ||
+      durabilityDigestBytes(candidateBytes) !==
+        selected.generation.manifest.database.digest
+    ) {
+      throw new Error("prepared Restore generation changed before activation");
+    }
+    durabilityChmodSync(candidatePath, 0o600);
+    durabilitySyncPath(candidatePath);
+    candidate = new DurabilityDatabaseSync(candidatePath);
+    candidate.exec("PRAGMA synchronous=FULL");
+    candidate.exec("PRAGMA foreign_keys=ON");
+    for (const capsule of selected.tail) {
+      durabilityApplyCapsule(candidate, capsule, layout);
+    }
+    durabilityRecoverReceiptCapsules(candidate, layout);
+    for (const artifact of durabilityReadReferencedArtifacts(candidate)) {
+      const bytes = durabilityVerifyObject(layout.recoveryRoot, artifact);
+      durabilityPromoteObject(layout.primaryRoot, { ...artifact, bytes });
+    }
+    if (
+      candidate.prepare("PRAGMA integrity_check").get().integrity_check !==
+        "ok" ||
+      candidate.prepare("PRAGMA foreign_key_check").all().length > 0
+    ) {
+      throw new Error("prepared Restore candidate failed integrity verification");
+    }
+    const state = durabilityReadState(candidate);
+    if (
+      canonicalJson(state.cursor) !==
+        canonicalJson(selected.public.targetCursor) ||
+      state.authorityEpoch !== selected.public.authorityEpoch
+    ) {
+      throw new Error("prepared Restore candidate changed its authority head");
+    }
+    if (state.cursor.revision > 0) {
+      durabilityVerifyCommit(
+        candidate,
+        durabilityReadCapsules(layout),
+        state.cursor.commitId,
+        layout,
+      );
+    }
+    candidate.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    candidate.close();
+    candidate = undefined;
+    durabilitySyncPath(candidatePath);
+    durabilityRenameSync(candidatePath, activeDatabasePath);
+    durabilitySyncPath(options.primaryRoot);
+
+    const activated = durabilityOpenDatabase(options.primaryRoot);
+    try {
+      durabilityRecoverAndVerify(activated, layout);
+      const state = durabilityReadState(activated);
+      durabilityRecordActivationCompletion(
+        layout,
+        selected.generation,
+        selected.generation.activation,
+      );
+      return { receipt: structuredClone(receipt), state };
+    } finally {
+      activated.close();
+    }
+  } finally {
+    candidate?.close();
+    durabilityRmSync(candidatePath, { force: true });
+    durabilityRmSync(`${candidatePath}-wal`, { force: true });
+    durabilityRmSync(`${candidatePath}-shm`, { force: true });
+    if (lockAcquired) {
+      durabilityRmSync(lockDirectory, { recursive: true, force: true });
+      durabilitySyncPath(options.recoveryRoot);
+    }
+  }
 }
 
 function durabilityRestorePrimary({
@@ -1339,7 +1671,7 @@ function durabilityRestorePrimary({
       throw new Error("restored candidate changed acknowledged Run state");
     }
     candidate.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    durabilityCreateGeneration(candidate, layout);
+    const recoveryGeneration = durabilityCreateGeneration(candidate, layout);
     candidate.close();
     candidate = undefined;
     durabilitySyncPath(candidatePath);
@@ -1350,6 +1682,11 @@ function durabilityRestorePrimary({
     try {
       durabilityRecoverAndVerify(activated, layout);
       const state = durabilityReadState(activated);
+      durabilityRecordActivationCompletion(layout, recoveryGeneration, {
+        requestId: request.requestId,
+        requestDigest,
+        receipt,
+      });
       return { receipt: structuredClone(receipt), state };
     } finally {
       activated.close();
@@ -2412,7 +2749,8 @@ export function openDurability(options) {
   try {
     durabilityInitialize(database, options);
     durabilityRecoverAndVerify(database, layout);
-    durabilityCreateGeneration(database, layout);
+    const generation = durabilityCreateGeneration(database, layout);
+    durabilityRecordCurrentActivationCompletion(database, layout, generation);
   } catch (error) {
     database.close();
     throw error;
@@ -2429,7 +2767,8 @@ export function openDurability(options) {
         durabilityRecoverAndVerify(database, layout, true);
         return operation(durabilityOperations(database, layout));
       });
-      durabilityCreateGeneration(database, layout);
+      const generation = durabilityCreateGeneration(database, layout);
+      durabilityRecordCurrentActivationCompletion(database, layout, generation);
       return result;
     },
 
