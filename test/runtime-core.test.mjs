@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import {
   chmodSync,
   copyFileSync,
@@ -1441,10 +1442,8 @@ test("an interruption after generation durability cannot expose a partial activa
       ),
       { workerData: { primaryRoot } },
     );
-    const obstruction = new Promise((resolve, reject) => {
-      worker.once("message", resolve);
-      worker.once("error", reject);
-    });
+    assert.deepEqual((await once(worker, "message"))[0], { status: "ready" });
+    const obstruction = once(worker, "message").then(([message]) => message);
 
     try {
       await assert.rejects(
