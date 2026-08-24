@@ -737,7 +737,11 @@ function durabilityReadVerifiedGenerations(layout) {
         readOnly: true,
       });
       try {
-        if (database.prepare("PRAGMA integrity_check").get().integrity_check !== "ok") {
+        if (
+          database.prepare("PRAGMA integrity_check").get().integrity_check !==
+            "ok" ||
+          database.prepare("PRAGMA foreign_key_check").all().length > 0
+        ) {
           throw new Error("recovery generation database integrity check failed");
         }
         const state = durabilityReadState(database);
@@ -848,51 +852,67 @@ function durabilityBuildRecoveryPoint(generation, capsules, layout) {
   };
 }
 
-function durabilityRecoveryRequired(layout, options) {
+function durabilityAnalyzeRecovery(layout, options) {
   const allVerified = durabilityReadVerifiedGenerations(layout);
   const expectedConfiguration = durabilityOptionsConfigurationIdentity(options);
-  const verified = allVerified.filter(
-    ({ manifest }) =>
-      manifest.operatorIdentity === options.operatorIdentity &&
-      canonicalJson(manifest.configuration) ===
-        canonicalJson(expectedConfiguration),
+  const operatorGenerations = allVerified.filter(
+    ({ manifest }) => manifest.operatorIdentity === options.operatorIdentity,
   );
-  const capsules = durabilityReadCapsules(layout);
   const maximumAuthorityEpoch = Math.max(
     0,
-    ...verified.map(({ manifest }) => manifest.authorityEpoch),
+    ...operatorGenerations.map(({ manifest }) => manifest.authorityEpoch),
   );
-  const candidates = verified
-    .filter(
-      ({ manifest }) => manifest.authorityEpoch === maximumAuthorityEpoch,
-    )
+  const highestEpochGenerations = operatorGenerations.filter(
+    ({ manifest }) => manifest.authorityEpoch === maximumAuthorityEpoch,
+  );
+  const capsules = durabilityReadCapsules(layout);
+  const candidates = highestEpochGenerations
     .map((generation) =>
       durabilityBuildRecoveryPoint(generation, capsules, layout),
     )
     .filter((point) => point !== null);
-  const target = candidates.sort(
-    (left, right) =>
-      right.public.targetCursor.revision - left.public.targetCursor.revision,
-  )[0]?.public.targetCursor;
-  const availablePoints = candidates
+  const maximumTargetRevision = Math.max(
+    -1,
+    ...candidates.map((point) => point.public.targetCursor.revision),
+  );
+  const authoritativePoints = candidates
     .filter(
-      (point) => canonicalJson(point.public.targetCursor) === canonicalJson(target),
+      (point) => point.public.targetCursor.revision === maximumTargetRevision,
     )
     .sort(
       (left, right) =>
         right.public.sourceCursor.revision - left.public.sourceCursor.revision,
     );
+  const authoritativeHeads = new Set(
+    authoritativePoints.map((point) => canonicalJson(point.public.targetCursor)),
+  );
+  if (authoritativeHeads.size > 1) {
+    throw new Error("recovery has conflicting authoritative recovery heads");
+  }
+  const authoritativeConfigurations = new Set(
+    authoritativePoints.map((point) =>
+      canonicalJson(point.generation.manifest.configuration),
+    ),
+  );
+  if (authoritativeConfigurations.size > 1) {
+    throw new Error("recovery head has conflicting configuration identities");
+  }
+  const configurationAvailable =
+    authoritativePoints.length > 0 &&
+    canonicalJson(authoritativePoints[0].generation.manifest.configuration) ===
+      canonicalJson(expectedConfiguration);
+  const availablePoints = configurationAvailable ? authoritativePoints : [];
   const recoveryPoints = availablePoints.map((point) => point.public);
-  const latestUnavailable = allVerified
-    .filter(
-      ({ manifest }) => manifest.operatorIdentity === options.operatorIdentity,
-    )
+  const latestUnavailable = highestEpochGenerations
     .sort(
       (left, right) =>
         right.manifest.cursor.revision - left.manifest.cursor.revision,
     )[0];
   const unavailableRecoveryPoints =
-    recoveryPoints.length > 0 || latestUnavailable === undefined
+    recoveryPoints.length > 0 ||
+    latestUnavailable === undefined ||
+    canonicalJson(latestUnavailable.manifest.configuration) ===
+      canonicalJson(expectedConfiguration)
       ? []
       : [
           {
@@ -908,27 +928,189 @@ function durabilityRecoveryRequired(layout, options) {
             ),
           },
         ];
+  const authoritativePoint = authoritativePoints[0];
+  return {
+    availablePoints,
+    authoritativePoints,
+    authority:
+      authoritativePoint === undefined
+        ? null
+        : {
+            cursor: structuredClone(authoritativePoint.public.targetCursor),
+            authorityEpoch: authoritativePoint.public.authorityEpoch,
+            schemaVersion:
+              authoritativePoint.generation.manifest.schemaVersion,
+            configuration: structuredClone(
+              authoritativePoint.generation.manifest.configuration,
+            ),
+          },
+    cursor:
+      authoritativePoint?.public.targetCursor ?? {
+        revision: 0,
+        commitId: DURABILITY_GENESIS_COMMIT_ID,
+      },
+    maximumAuthorityEpoch,
+    recoveryPoints,
+    unavailableRecoveryPoints,
+  };
+}
+
+function durabilityReadRecoveryRequest(layout, analysis, requestId, requestDigest) {
+  const receiptCapsules = durabilityReadReceiptCapsules(layout);
+  const exactReceipt = receiptCapsules.find(
+    (capsule) =>
+      capsule.request.id === requestId &&
+      capsule.request.digest === requestDigest,
+  );
+  if (exactReceipt !== undefined) {
+    return {
+      requestDigest: exactReceipt.request.digest,
+      receipt: structuredClone(exactReceipt.receipt),
+    };
+  }
+
+  const identities = receiptCapsules
+    .filter(
+      (capsule) =>
+        capsule.request.id === requestId && capsule.conflictWithDigest === null,
+    )
+    .map((capsule) => ({
+      requestDigest: capsule.request.digest,
+      receipt: capsule.receipt,
+    }));
+  const point = analysis.authoritativePoints[0];
+  if (point !== undefined) {
+    const database = new DurabilityDatabaseSync(point.generation.databasePath, {
+      readOnly: true,
+    });
+    try {
+      identities.push(
+        ...database
+          .prepare(
+            `SELECT request_digest, receipt_json
+             FROM request_receipts WHERE request_id = ?
+             UNION ALL
+             SELECT request_digest, receipt_json
+             FROM recovery_activations WHERE request_id = ?`,
+          )
+          .all(requestId, requestId)
+          .map((row) => ({
+            requestDigest: row.request_digest,
+            receipt: JSON.parse(row.receipt_json),
+          })),
+      );
+    } finally {
+      database.close();
+    }
+    const tailCapsule = point.tail.find(
+      (capsule) => capsule.request.id === requestId,
+    );
+    if (tailCapsule !== undefined) {
+      identities.push({
+        requestDigest: tailCapsule.request.digest,
+        receipt: tailCapsule.receipt,
+      });
+    }
+  }
+  const distinctIdentities = new Map(
+    identities.map((identity) => [identity.requestDigest, identity]),
+  );
+  if (distinctIdentities.size > 1) {
+    throw new Error("request identity conflicts inside the recovery boundary");
+  }
+  const [authoritative] = distinctIdentities.values();
+  if (authoritative === undefined) {
+    return null;
+  }
+  if (authoritative.requestDigest === requestDigest) {
+    return {
+      requestDigest: authoritative.requestDigest,
+      receipt: structuredClone(authoritative.receipt),
+    };
+  }
+  return {
+    conflictWithDigest: authoritative.requestDigest,
+    priorReceipt: structuredClone(authoritative.receipt),
+  };
+}
+
+function durabilityRejectRecovery(layout, analysis, candidate) {
+  if (analysis.authority === null) {
+    throw new Error("recovery has no authoritative head for a durable receipt");
+  }
+  if (
+    canonicalJson(candidate.receipt.cursor) !==
+    canonicalJson(analysis.authority.cursor)
+  ) {
+    throw new Error("recovery rejection receipt cursor is stale");
+  }
+  const capsule = durabilityBuildReceiptCapsuleForAuthority(
+    analysis.authority,
+    candidate,
+  );
+  const existing = durabilityReadReceiptCapsules(layout).find(
+    (item) =>
+      item.request.id === candidate.requestId &&
+      item.request.digest === candidate.requestDigest,
+  );
+  if (existing !== undefined) {
+    if (
+      existing.capsuleDigest !== capsule.capsuleDigest ||
+      canonicalJson(existing.receipt) !== canonicalJson(candidate.receipt)
+    ) {
+      throw new Error("durable recovery rejection differs from its receipt");
+    }
+    return structuredClone(existing.receipt);
+  }
+  durabilityWriteImmutableJson(
+    durabilityReceiptCapsulePath(layout, capsule),
+    layout.receiptsDirectory,
+    capsule,
+  );
+  const verified = durabilityReadReceiptCapsules(layout).find(
+    (item) => item.capsuleDigest === capsule.capsuleDigest,
+  );
+  if (verified === undefined) {
+    throw new Error("recovery rejection receipt was not durably verified");
+  }
+  return structuredClone(verified.receipt);
+}
+
+function durabilityRecoveryRequired(layout, options) {
+  const analysis = durabilityAnalyzeRecovery(layout, options);
   return {
     kind: "RecoveryRequired",
     inspect() {
       return {
-        cursor:
-          recoveryPoints[0]?.targetCursor ?? {
-            revision: 0,
-            commitId: DURABILITY_GENESIS_COMMIT_ID,
-          },
+        cursor: structuredClone(analysis.cursor),
         run: null,
         latestReceipt: null,
         offers: [],
+        authorityEpoch: analysis.maximumAuthorityEpoch,
         recovery: {
           status: "RecoveryRequired",
           condition: "Waiting for Operator",
-          recoveryPoints,
-          ...(unavailableRecoveryPoints.length === 0
+          recoveryPoints: structuredClone(analysis.recoveryPoints),
+          ...(analysis.unavailableRecoveryPoints.length === 0
             ? {}
-            : { unavailableRecoveryPoints }),
+            : {
+                unavailableRecoveryPoints: structuredClone(
+                  analysis.unavailableRecoveryPoints,
+                ),
+              }),
         },
       };
+    },
+    receipt(requestId, requestDigest) {
+      return durabilityReadRecoveryRequest(
+        layout,
+        analysis,
+        requestId,
+        requestDigest,
+      );
+    },
+    reject(candidate) {
+      return durabilityRejectRecovery(layout, analysis, candidate);
     },
     restore({
       request,
@@ -937,7 +1119,7 @@ function durabilityRecoveryRequired(layout, options) {
       restoredAt,
       replacementOffer,
     }) {
-      const selected = availablePoints.find(
+      const selected = analysis.availablePoints.find(
         (point) => point.public.id === recoveryPointId,
       );
       if (selected === undefined) {
@@ -966,12 +1148,9 @@ function durabilityRestorePrimary({
   restoredAt,
   replacementOffer,
 }) {
-  const currentRecoveryPoints = durabilityRecoveryRequired(
-    layout,
-    options,
-  ).inspect().recovery.recoveryPoints;
-  const selectedStillOffered = currentRecoveryPoints.some(
-    (point) => point.id === selected.public.id,
+  const currentAnalysis = durabilityAnalyzeRecovery(layout, options);
+  const selectedStillOffered = currentAnalysis.availablePoints.some(
+    (point) => point.public.id === selected.public.id,
   );
   const verifiedGeneration = durabilityReadVerifiedGenerations(layout).find(
     ({ manifest }) =>
@@ -1845,12 +2024,24 @@ function durabilityBuildCapsule(database, candidate) {
 
 function durabilityBuildReceiptCapsule(database, candidate) {
   const metadata = durabilityReadMetadata(database);
+  return durabilityBuildReceiptCapsuleForAuthority(
+    {
+      authorityEpoch: Number(metadata.authorityEpoch),
+      schemaVersion: Number(metadata.schemaVersion),
+      configuration: durabilityMetadataConfigurationIdentity(metadata),
+      cursor: candidate.receipt.cursor,
+    },
+    candidate,
+  );
+}
+
+function durabilityBuildReceiptCapsuleForAuthority(authority, candidate) {
   return durabilitySealCapsule({
     format: "openab.rejection-receipt/v1",
-    authorityEpoch: Number(metadata.authorityEpoch),
-    schemaVersion: Number(metadata.schemaVersion),
-    configuration: durabilityMetadataConfigurationIdentity(metadata),
-    cursor: candidate.receipt.cursor,
+    authorityEpoch: authority.authorityEpoch,
+    schemaVersion: authority.schemaVersion,
+    configuration: structuredClone(authority.configuration),
+    cursor: structuredClone(authority.cursor),
     request: {
       id: candidate.requestId,
       digest: candidate.requestDigest,

@@ -98,7 +98,9 @@ authority epoch. Every offered point names its source and target cursors,
 configuration and secret-reference generations, capsule-tail length, and
 referenced-artifact count. Points from older generations are offered only when
 they reconstruct the same latest authoritative head; Restore never offers an
-older head as a rollback.
+older head as a rollback. The Runtime Core selects the highest known authority
+epoch before matching the current configuration. Conflicting heads at that
+epoch fail closed instead of selecting one by ordering or arrival time.
 
 When the current preflight inputs do not match the frozen configuration or
 secret-reference generations, `Observe` discloses the required non-secret
@@ -138,6 +140,12 @@ a new generation before the database is atomically activated. Activation fences
 every capability from the earlier epoch. A failed activation leaves no
 authoritative database and can be retried only after the failure is observed and
 corrected.
+
+An `Act` that does not match the current Restore offer or one of its disclosed
+points receives a durable rejected receipt and the latest `RecoveryRequired`
+view. Exact retries return that receipt without adding another disposition.
+The receipt remains in the recovery boundary and is incorporated when a later
+authorized Restore activates the database.
 
 Known pending, active, or uncertain Effect Intents are not dispatched,
 cancelled, or declared failed by Restore. They appear under an

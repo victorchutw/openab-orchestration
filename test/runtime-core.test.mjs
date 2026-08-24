@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -91,6 +92,32 @@ function capsuleDigest(capsule) {
   return `sha256:${createHash("sha256")
     .update(JSON.stringify(canonicalize(body)))
     .digest("hex")}`;
+}
+
+function rewriteGeneration(directory, { rewriteDatabase, rewriteManifest }) {
+  const databasePath = join(directory, "runtime-core.sqlite3");
+  const manifestPath = join(directory, "manifest.json");
+  chmodSync(databasePath, 0o600);
+  const database = new DatabaseSync(databasePath);
+  try {
+    rewriteDatabase(database);
+  } finally {
+    database.close();
+  }
+  chmodSync(databasePath, 0o400);
+
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  rewriteManifest(manifest);
+  const databaseBytes = readFileSync(databasePath);
+  manifest.database = {
+    size: databaseBytes.byteLength,
+    digest: `sha256:${createHash("sha256").update(databaseBytes).digest("hex")}`,
+  };
+  delete manifest.manifestDigest;
+  manifest.manifestDigest = canonicalDigest(manifest);
+  chmodSync(manifestPath, 0o600);
+  writeFileSync(manifestPath, `${JSON.stringify(canonicalize(manifest))}\n`);
+  chmodSync(manifestPath, 0o400);
 }
 
 async function withAcceptedStorage(testBody) {
@@ -331,6 +358,285 @@ test("two independently verified generations disclose the same authoritative hea
     }
   }));
 
+test("an unavailable highest authority epoch never offers a matching older epoch", () =>
+  withAcceptedStorage(async ({ options, primaryRoot, recoveryRoot, accepted }) => {
+    rmSync(primaryRoot, { recursive: true });
+    let recoveryCore = openRuntimeCore(options);
+    const observed = await recoveryCore.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    await recoveryCore.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:create-epoch-two",
+      offer: observed.offers[0].offer,
+      action: {
+        kind: "Restore",
+        payload: {
+          recoveryPoint: observed.view.recovery.recoveryPoints[0].id,
+        },
+      },
+    });
+    recoveryCore.close();
+
+    const unavailableConfiguration = {
+      revision: "configuration:epoch-two-unavailable",
+      digest: `sha256:${"b".repeat(64)}`,
+      secretReferenceGenerations: {
+        "execution-worker/provider-authentication":
+          "generation:epoch-two-unavailable",
+      },
+    };
+    const generationsDirectory = join(recoveryRoot, "generations");
+    for (const name of readdirSync(generationsDirectory)) {
+      const directory = join(generationsDirectory, name);
+      const manifest = JSON.parse(
+        readFileSync(join(directory, "manifest.json"), "utf8"),
+      );
+      if (manifest.authorityEpoch !== 2) {
+        continue;
+      }
+      rewriteGeneration(directory, {
+        rewriteDatabase(database) {
+          const update = database.prepare(
+            "UPDATE metadata SET value = ? WHERE key = ?",
+          );
+          update.run(
+            unavailableConfiguration.revision,
+            "configurationRevision",
+          );
+          update.run(
+            unavailableConfiguration.digest,
+            "effectiveConfigurationDigest",
+          );
+          update.run(
+            JSON.stringify(
+              unavailableConfiguration.secretReferenceGenerations,
+            ),
+            "secretReferenceGenerations",
+          );
+        },
+        rewriteManifest(candidate) {
+          candidate.configuration = unavailableConfiguration;
+        },
+      });
+    }
+    rmSync(primaryRoot, { recursive: true });
+
+    recoveryCore = openRuntimeCore(options);
+    try {
+      const waiting = await recoveryCore.operator({
+        kind: "Observe",
+        principal: OPERATOR_ID,
+        locale: "en",
+      });
+      assert.deepEqual(waiting.cursor, accepted.cursor);
+      assert.equal(waiting.view.authorityEpoch, 2);
+      assert.deepEqual(waiting.view.recovery.recoveryPoints, []);
+      assert.deepEqual(waiting.offers, []);
+      assert.deepEqual(waiting.view.recovery.unavailableRecoveryPoints, [
+        {
+          sourceCursor: accepted.cursor,
+          reason: "ConfigurationOrSecretGenerationUnavailable",
+          requiredConfigurationRevision: unavailableConfiguration.revision,
+          requiredEffectiveConfigurationDigest:
+            unavailableConfiguration.digest,
+          requiredSecretReferenceGenerations:
+            unavailableConfiguration.secretReferenceGenerations,
+        },
+      ]);
+    } finally {
+      recoveryCore.close();
+    }
+  }));
+
+test("conflicting heads in the highest authority epoch fail closed", () =>
+  withAcceptedStorage(async ({ options, primaryRoot, recoveryRoot }) => {
+    rmSync(primaryRoot, { recursive: true });
+    const generationsDirectory = join(recoveryRoot, "generations");
+    const sourceName = readdirSync(generationsDirectory).find((name) => {
+      const manifest = JSON.parse(
+        readFileSync(join(generationsDirectory, name, "manifest.json"), "utf8"),
+      );
+      return manifest.cursor.revision === 1;
+    });
+    const conflictingDirectory = join(
+      generationsDirectory,
+      "00000001-e1-conflicting-head",
+    );
+    cpSync(join(generationsDirectory, sourceName), conflictingDirectory, {
+      recursive: true,
+    });
+    const commitsDirectory = join(recoveryRoot, "commits");
+    const originalCapsule = JSON.parse(
+      readFileSync(
+        join(commitsDirectory, readdirSync(commitsDirectory)[0]),
+        "utf8",
+      ),
+    );
+    const conflictingCapsule = structuredClone(originalCapsule);
+    conflictingCapsule.commitId = "commit:conflicting-head";
+    conflictingCapsule.request.id = "request:conflicting-head";
+    conflictingCapsule.request.digest = canonicalDigest(
+      conflictingCapsule.request.content,
+    );
+    conflictingCapsule.receipt.requestId = conflictingCapsule.request.id;
+    conflictingCapsule.receipt.commitId = conflictingCapsule.commitId;
+    delete conflictingCapsule.capsuleDigest;
+    conflictingCapsule.capsuleDigest = capsuleDigest(conflictingCapsule);
+    writeFileSync(
+      join(commitsDirectory, "00000001-commit%3Aconflicting-head.json"),
+      `${JSON.stringify(canonicalize(conflictingCapsule))}\n`,
+    );
+    rewriteGeneration(conflictingDirectory, {
+      rewriteDatabase(database) {
+        database.exec("PRAGMA foreign_keys = OFF");
+        database.exec("DROP TRIGGER immutable_commit_identities_update");
+        database.exec("DROP TRIGGER immutable_request_receipts_update");
+        database.exec("DROP TRIGGER immutable_audit_records_update");
+        database
+          .prepare(
+            `UPDATE commit_identities
+             SET commit_id = ?, request_id = ?, request_digest = ?,
+                 capsule_digest = ?
+             WHERE commit_id = ?`,
+          )
+          .run(
+            conflictingCapsule.commitId,
+            conflictingCapsule.request.id,
+            conflictingCapsule.request.digest,
+            conflictingCapsule.capsuleDigest,
+            originalCapsule.commitId,
+          );
+        database
+          .prepare(
+            `UPDATE request_receipts
+             SET request_id = ?, request_digest = ?, receipt_json = ?,
+                 commit_id = ?, receipt_capsule_digest = ?
+             WHERE commit_id = ?`,
+          )
+          .run(
+            conflictingCapsule.request.id,
+            conflictingCapsule.request.digest,
+            JSON.stringify(canonicalize(conflictingCapsule.receipt)),
+            conflictingCapsule.commitId,
+            conflictingCapsule.capsuleDigest,
+            originalCapsule.commitId,
+          );
+        database
+          .prepare("UPDATE audit_records SET commit_id = ? WHERE commit_id = ?")
+          .run(conflictingCapsule.commitId, originalCapsule.commitId);
+        database
+          .prepare("UPDATE effect_intents SET commit_id = ? WHERE commit_id = ?")
+          .run(conflictingCapsule.commitId, originalCapsule.commitId);
+        database
+          .prepare(
+            "UPDATE current_projection SET commit_id = ? WHERE singleton = 1",
+          )
+          .run(conflictingCapsule.commitId);
+        database.exec("PRAGMA foreign_keys = ON");
+        assert.deepEqual(database.prepare("PRAGMA foreign_key_check").all(), []);
+      },
+      rewriteManifest(manifest) {
+        manifest.cursor.commitId = conflictingCapsule.commitId;
+      },
+    });
+
+    assert.throws(
+      () => openRuntimeCore(options),
+      /conflicting authoritative recovery heads/,
+    );
+  }));
+
+test("an invalid RecoveryRequired Act has a durable rejected receipt", () =>
+  withAcceptedStorage(async ({ options, primaryRoot, accepted }) => {
+    rmSync(primaryRoot, { recursive: true });
+    const recoveryCore = openRuntimeCore(options);
+    try {
+      const observed = await recoveryCore.operator({
+        kind: "Observe",
+        principal: OPERATOR_ID,
+        locale: "en",
+      });
+      const invalid = {
+        kind: "Act",
+        principal: OPERATOR_ID,
+        locale: "en",
+        requestId: "request:invalid-recovery-act",
+        offer: "offer:not-offered",
+        action: {
+          kind: "Restore",
+          payload: {
+            recoveryPoint: observed.view.recovery.recoveryPoints[0].id,
+          },
+        },
+      };
+
+      const rejected = await recoveryCore.operator(invalid);
+      assert.equal(rejected.status, "rejected");
+      assert.equal(rejected.rejection.code, "MismatchedOffer");
+      assert.equal(rejected.receipt.status, "rejected");
+      assert.deepEqual(rejected.cursor, accepted.cursor);
+      assert.equal(rejected.view.recovery.status, "RecoveryRequired");
+      assert.deepEqual(rejected.offers, observed.offers);
+
+      const unofferedPoint = {
+        ...invalid,
+        requestId: "request:unoffered-recovery-point",
+        offer: observed.offers[0].offer,
+        action: {
+          kind: "Restore",
+          payload: { recoveryPoint: "recovery-point:not-offered" },
+        },
+      };
+      const rejectedPoint = await recoveryCore.operator(unofferedPoint);
+      assert.equal(rejectedPoint.status, "rejected");
+      assert.equal(rejectedPoint.rejection.code, "MismatchedOffer");
+      assert.deepEqual(rejectedPoint.cursor, accepted.cursor);
+
+      recoveryCore.close();
+      const reopened = openRuntimeCore(options);
+      try {
+        const duplicate = await reopened.operator(invalid);
+        assert.equal(duplicate.status, "duplicate");
+        assert.deepEqual(duplicate.receipt, rejected.receipt);
+        assert.equal(duplicate.view.recovery.status, "RecoveryRequired");
+
+        const refreshed = await reopened.operator({
+          kind: "Observe",
+          principal: OPERATOR_ID,
+          locale: "en",
+        });
+        await reopened.operator({
+          kind: "Act",
+          principal: OPERATOR_ID,
+          locale: "en",
+          requestId: "request:restore-after-rejection",
+          offer: refreshed.offers[0].offer,
+          action: {
+            kind: "Restore",
+            payload: {
+              recoveryPoint: refreshed.view.recovery.recoveryPoints[0].id,
+            },
+          },
+        });
+        const afterRestore = await reopened.operator(invalid);
+        assert.equal(afterRestore.status, "duplicate");
+        assert.deepEqual(afterRestore.receipt, rejected.receipt);
+        const pointAfterRestore = await reopened.operator(unofferedPoint);
+        assert.equal(pointAfterRestore.status, "duplicate");
+        assert.deepEqual(pointAfterRestore.receipt, rejectedPoint.receipt);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      recoveryCore.close();
+    }
+  }));
+
 test("Restore fences capabilities from the earlier authority epoch", async () => {
   const root = mkdtempSync(join(tmpdir(), "openab-restore-fencing-"));
   const primaryRoot = join(root, "primary");
@@ -532,7 +838,10 @@ test("Restore applies a contiguous capsule tail when the latest generation was n
     }
   }));
 
-test("Restore reconstructs and verifies referenced content-addressed artifacts before activation", () => {
+test(
+  "Restore faults safely during capsule-tail and artifact reconstruction",
+  { skip: process.platform === "win32" },
+  () => {
   const root = mkdtempSync(join(tmpdir(), "openab-artifact-restore-"));
   const primaryRoot = join(root, "primary");
   const recoveryRoot = join(root, "recovery");
@@ -572,6 +881,37 @@ test("Restore reconstructs and verifies referenced content-addressed artifacts b
     },
   };
   let durability = openDurability(options);
+  const primaryObjectDirectory = join(
+    primaryRoot,
+    "objects",
+    "sha256",
+    artifactDigest.slice(7, 9),
+  );
+
+  function restore(recoveryPoint, requestId, restoredAt) {
+    const request = {
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId,
+      offer: "offer:artifact-restore",
+      action: {
+        kind: "Restore",
+        payload: { recoveryPoint: recoveryPoint.id },
+      },
+    };
+    return durability.restore({
+      request,
+      requestDigest: canonicalDigest({
+        principal: request.principal,
+        offer: request.offer,
+        action: request.action,
+      }),
+      recoveryPointId: recoveryPoint.id,
+      restoredAt,
+      replacementOffer: initialOffer,
+    });
+  }
 
   try {
     durability.act((transaction) =>
@@ -619,33 +959,39 @@ test("Restore reconstructs and verifies referenced content-addressed artifacts b
       }),
     );
     durability.close();
+    const generationsDirectory = join(recoveryRoot, "generations");
+    const latestGeneration = readdirSync(generationsDirectory).find((name) => {
+      const manifest = JSON.parse(
+        readFileSync(join(generationsDirectory, name, "manifest.json"), "utf8"),
+      );
+      return manifest.cursor.revision === 1;
+    });
+    rmSync(join(generationsDirectory, latestGeneration), { recursive: true });
     rmSync(primaryRoot, { recursive: true });
 
     durability = openDurability(options);
     const recovery = durability.inspect().recovery;
     assert.equal(recovery.recoveryPoints[0].referencedArtifactCount, 1);
-    const restoreRequest = {
-      kind: "Act",
-      principal: OPERATOR_ID,
-      locale: "en",
-      requestId: "request:artifact-restore",
-      offer: "offer:artifact-restore",
-      action: {
-        kind: "Restore",
-        payload: { recoveryPoint: recovery.recoveryPoints[0].id },
-      },
-    };
-    durability.restore({
-      request: restoreRequest,
-      requestDigest: canonicalDigest({
-        principal: restoreRequest.principal,
-        offer: restoreRequest.offer,
-        action: restoreRequest.action,
-      }),
-      recoveryPointId: recovery.recoveryPoints[0].id,
-      restoredAt: "2026-08-13T00:00:01.000Z",
-      replacementOffer: initialOffer,
-    });
+    assert.equal(recovery.recoveryPoints[0].capsuleTailLength, 1);
+    mkdirSync(primaryObjectDirectory, { recursive: true });
+    chmodSync(primaryObjectDirectory, 0o500);
+    assert.throws(
+      () =>
+        restore(
+          recovery.recoveryPoints[0],
+          "request:tail-artifact-fault",
+          "2026-08-13T00:00:01.000Z",
+        ),
+      (error) => error?.code === "EACCES",
+    );
+    assert.equal(existsSync(join(primaryRoot, "runtime-core.sqlite3")), false);
+    chmodSync(primaryObjectDirectory, 0o700);
+    rmSync(join(primaryRoot, "objects"), { recursive: true });
+    restore(
+      recovery.recoveryPoints[0],
+      "request:artifact-tail-restore",
+      "2026-08-13T00:00:02.000Z",
+    );
     durability.close();
 
     const objectPath = join(
@@ -655,6 +1001,32 @@ test("Restore reconstructs and verifies referenced content-addressed artifacts b
       artifactDigest.slice(7, 9),
       artifactDigest.slice(9),
     );
+    assert.deepEqual(readFileSync(objectPath), artifactBytes);
+
+    rmSync(primaryRoot, { recursive: true });
+    durability = openDurability(options);
+    const generatedPoint = durability.inspect().recovery.recoveryPoints[0];
+    assert.equal(generatedPoint.capsuleTailLength, 0);
+    mkdirSync(primaryObjectDirectory, { recursive: true });
+    chmodSync(primaryObjectDirectory, 0o500);
+    assert.throws(
+      () =>
+        restore(
+          generatedPoint,
+          "request:generation-artifact-fault",
+          "2026-08-13T00:00:03.000Z",
+        ),
+      (error) => error?.code === "EACCES",
+    );
+    assert.equal(existsSync(join(primaryRoot, "runtime-core.sqlite3")), false);
+    chmodSync(primaryObjectDirectory, 0o700);
+    rmSync(join(primaryRoot, "objects"), { recursive: true });
+    restore(
+      generatedPoint,
+      "request:generation-artifact-restore",
+      "2026-08-13T00:00:04.000Z",
+    );
+    durability.close();
     assert.deepEqual(readFileSync(objectPath), artifactBytes);
 
     const recoveryObjectPath = join(
@@ -673,10 +1045,14 @@ test("Restore reconstructs and verifies referenced content-addressed artifacts b
       false,
     );
   } finally {
+    if (existsSync(primaryObjectDirectory)) {
+      chmodSync(primaryObjectDirectory, 0o700);
+    }
     durability.close();
     rmSync(root, { recursive: true, force: true });
   }
-});
+  },
+);
 
 test("missing configuration or secret-reference generations wait without weakening the Run", () =>
   withAcceptedStorage(async ({ options, primaryRoot, accepted }) => {
@@ -865,6 +1241,100 @@ test(
       }
     }),
 );
+
+test("an interruption after generation durability cannot expose a partial activation", () =>
+  withAcceptedStorage(async ({ options, primaryRoot, recoveryRoot, accepted }) => {
+    rmSync(primaryRoot, { recursive: true });
+    let recoveryCore = openRuntimeCore(options);
+    const observed = await recoveryCore.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    const request = {
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:obstruct-atomic-activation",
+      offer: observed.offers[0].offer,
+      action: {
+        kind: "Restore",
+        payload: {
+          recoveryPoint: observed.view.recovery.recoveryPoints[0].id,
+        },
+      },
+    };
+    const worker = new Worker(
+      new URL(
+        "../test-support/runtime-core-activation-obstructor.mjs",
+        import.meta.url,
+      ),
+      { workerData: { primaryRoot } },
+    );
+    const obstruction = new Promise((resolve, reject) => {
+      worker.once("message", resolve);
+      worker.once("error", reject);
+    });
+
+    try {
+      await assert.rejects(
+        recoveryCore.operator(request),
+        (error) => error?.code === "EISDIR" || error?.code === "ENOTEMPTY",
+      );
+      assert.deepEqual(await obstruction, { status: "obstructed" });
+      const generationManifests = readdirSync(
+        join(recoveryRoot, "generations"),
+      ).map((name) =>
+        JSON.parse(
+          readFileSync(
+            join(recoveryRoot, "generations", name, "manifest.json"),
+            "utf8",
+          ),
+        ),
+      );
+      assert.equal(
+        generationManifests.some((manifest) => manifest.authorityEpoch === 2),
+        true,
+      );
+      rmSync(join(primaryRoot, "runtime-core.sqlite3"), { recursive: true });
+      assert.equal(
+        existsSync(join(primaryRoot, "runtime-core.sqlite3")),
+        false,
+      );
+
+      recoveryCore.close();
+      recoveryCore = openRuntimeCore(options);
+      const reconnected = await recoveryCore.operator({
+        kind: "Observe",
+        principal: OPERATOR_ID,
+        locale: "en",
+      });
+      assert.equal(reconnected.view.authorityEpoch, 2);
+      assert.deepEqual(reconnected.cursor, accepted.cursor);
+      const restored = await recoveryCore.operator({
+        kind: "Act",
+        principal: OPERATOR_ID,
+        locale: "en",
+        requestId: "request:activate-after-obstruction",
+        offer: reconnected.offers[0].offer,
+        action: {
+          kind: "Restore",
+          payload: {
+            recoveryPoint: reconnected.view.recovery.recoveryPoints[0].id,
+          },
+        },
+      });
+      assert.equal(restored.view.authorityEpoch, 3);
+      assert.deepEqual(restored.cursor, accepted.cursor);
+    } finally {
+      await worker.terminate();
+      recoveryCore.close();
+      rmSync(join(primaryRoot, "runtime-core.sqlite3"), {
+        recursive: true,
+        force: true,
+      });
+    }
+  }));
 
 test("exact replay returns the original receipt without another transition", () =>
   withRuntimeCore(async ({ core }) => {

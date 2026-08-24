@@ -80,6 +80,7 @@ function runtimeDurablyReject(
   requestDigest,
   rejection,
   conflictWithDigest,
+  projectReply = runtimeRejectedReply,
 ) {
   const receipt = createRejectionReceipt(
     durability.inspect(),
@@ -94,12 +95,60 @@ function runtimeDurablyReject(
     conflictWithDigest,
     receipt,
   });
-  return runtimeRejectedReply(
+  return projectReply(
     durability,
     request,
     rejection,
     durableReceipt,
   );
+}
+
+function runtimeRecoveryReply(state, request, recoveryOffer, result) {
+  const recoveryPointIds = state.recovery.recoveryPoints.map(
+    (point) => point.id,
+  );
+  return {
+    ...result,
+    cursor: structuredClone(state.cursor),
+    view: {
+      locale: request.locale,
+      authorityEpoch: state.authorityEpoch,
+      run: null,
+      latestReceipt: null,
+      recovery: structuredClone(state.recovery),
+      copy:
+        request.locale === "zh-TW"
+          ? {
+              status: "主要儲存已遺失，需要復原",
+              nextAction:
+                recoveryPointIds.length === 0
+                  ? "等待 Operator 提供相符的設定與 Secret 參照世代"
+                  : "選擇已驗證的復原點",
+            }
+          : {
+              status: "Primary storage recovery is required",
+              nextAction:
+                recoveryPointIds.length === 0
+                  ? "Wait for matching configuration and secret-reference generations"
+                  : "Select a verified recovery point",
+            },
+    },
+    offers:
+      recoveryPointIds.length === 0
+        ? []
+        : [
+            {
+              kind: "Restore",
+              offer: recoveryOffer,
+              constraints: {
+                recoveryPoint: {
+                  type: "string",
+                  enum: recoveryPointIds,
+                },
+              },
+            },
+          ],
+  };
 }
 
 export function openRuntimeCore(rawOptions) {
@@ -130,20 +179,81 @@ export function openRuntimeCore(rawOptions) {
       authorizeOperatorRequest(request, options.operatorIdentity);
       if (durability.kind === "RecoveryRequired") {
         const state = durability.inspect();
-        const recoveryPointIds = state.recovery.recoveryPoints.map(
-          (point) => point.id,
-        );
+        const projectRecoveryRejection = (
+          recoveryDurability,
+          recoveryRequest,
+          rejection,
+          receipt,
+        ) =>
+          runtimeRecoveryReply(
+            recoveryDurability.inspect(),
+            recoveryRequest,
+            recoveryOffer,
+            { status: "rejected", rejection, receipt },
+          );
         if (request.kind === "Act") {
-          if (
-            request.offer !== recoveryOffer ||
-            request.action.kind !== "Restore" ||
-            !recoveryPointIds.includes(request.action.payload.recoveryPoint)
-          ) {
-            throw new Error("Restore action does not match an offered recovery point");
+          const requestDigest = operatorRequestDigest(request);
+          const prior = durability.receipt(request.requestId, requestDigest);
+          if (prior !== null) {
+            if (prior.conflictWithDigest !== undefined) {
+              const rejection = {
+                code: "RequestIdConflict",
+                message: "requestId was already used with different content",
+              };
+              return runtimeDurablyReject(
+                durability,
+                options,
+                request,
+                requestDigest,
+                rejection,
+                prior.conflictWithDigest,
+                projectRecoveryRejection,
+              );
+            }
+            return runtimeRecoveryReply(
+              state,
+              request,
+              recoveryOffer,
+              { status: "duplicate", receipt: prior.receipt },
+            );
           }
+
+          let rejection;
+          if (request.offer !== recoveryOffer) {
+            rejection = {
+              code: "MismatchedOffer",
+              message: "offer is not recognized for primary recovery",
+            };
+          } else if (request.action.kind !== "Restore") {
+            rejection = {
+              code: "ActionNotOffered",
+              message: "only Restore is offered while primary recovery is required",
+            };
+          } else if (
+            !state.recovery.recoveryPoints.some(
+              (point) => point.id === request.action.payload.recoveryPoint,
+            )
+          ) {
+            rejection = {
+              code: "MismatchedOffer",
+              message: "recovery point is not verified and offered",
+            };
+          }
+          if (rejection !== undefined) {
+            return runtimeDurablyReject(
+              durability,
+              options,
+              request,
+              requestDigest,
+              rejection,
+              undefined,
+              projectRecoveryRejection,
+            );
+          }
+
           const activation = durability.restore({
             request,
-            requestDigest: operatorRequestDigest(request),
+            requestDigest,
             recoveryPointId: request.action.payload.recoveryPoint,
             restoredAt: options.clock(),
             replacementOffer: postRestoreOffer,
@@ -157,47 +267,12 @@ export function openRuntimeCore(rawOptions) {
             { status: "accepted", receipt: activation.receipt },
           );
         }
-        return {
-          status: "observed",
-          cursor: structuredClone(state.cursor),
-          view: {
-            locale: request.locale,
-            run: null,
-            latestReceipt: null,
-            recovery: structuredClone(state.recovery),
-            copy:
-              request.locale === "zh-TW"
-                ? {
-                    status: "主要儲存已遺失，需要復原",
-                    nextAction:
-                      recoveryPointIds.length === 0
-                        ? "等待 Operator 提供相符的設定與 Secret 參照世代"
-                        : "選擇已驗證的復原點",
-                  }
-                : {
-                    status: "Primary storage recovery is required",
-                    nextAction:
-                      recoveryPointIds.length === 0
-                        ? "Wait for matching configuration and secret-reference generations"
-                        : "Select a verified recovery point",
-                  },
-          },
-          offers:
-            recoveryPointIds.length === 0
-              ? []
-              : [
-                  {
-                    kind: "Restore",
-                    offer: recoveryOffer,
-                    constraints: {
-                      recoveryPoint: {
-                        type: "string",
-                        enum: recoveryPointIds,
-                      },
-                    },
-                  },
-                ],
-        };
+        return runtimeRecoveryReply(
+          state,
+          request,
+          recoveryOffer,
+          { status: "observed" },
+        );
       }
       if (request.kind === "Observe") {
         return projectOperatorReply(
