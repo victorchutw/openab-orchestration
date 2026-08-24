@@ -38,6 +38,26 @@ acceptance evidence, an independent review of the exact candidate, at most one
 review-fix pass, and a human handoff. Recurring discovery remains read-only
 until a maintainer authorizes the next bounded unit of work.
 
+## Branches and pull requests
+
+Use one short-lived `issue-<number>-<slug>` branch per accepted ticket. Keep
+`main` releasable; this repository does not use a long-lived development branch
+or GitFlow. Commits remain reviewable units and carry both DCO sign-off and a
+`Refs: #<number>` trailer.
+
+Push and open a pull request only after the maintainer authorizes publication.
+Link the ticket with `Closes #<number>`, disclose material AI assistance, and
+keep the pull-request head stable during independent review. Any new commit
+supersedes review evidence for the previous head and must pass CI and focused
+re-review before handoff.
+
+`main` accepts pull requests through rebase merge after the required `Verify`
+check passes. A second-human approval is not mechanically required while the
+project has one maintainer; independent review evidence and the maintainer's
+final content review are still required. Merge is a separate maintainer
+decision. The complete operational sequence is the [pull-request development
+workflow](./docs/agents/pull-request-workflow.md).
+
 ## Verification
 
 Run the same clean-checkout entry points used by maintainers:
@@ -46,9 +66,12 @@ Run the same clean-checkout entry points used by maintainers:
 npm run check
 npm run build
 npm test
+npm run check:public -- --revision HEAD
 ```
 
 The product uses Node.js 22.13 or newer and has no runtime package dependencies.
+The last command performs the automated public-boundary scan used by CI; it
+does not replace the human exposure review below.
 
 ## Public exposure review
 

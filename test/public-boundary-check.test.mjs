@@ -34,10 +34,15 @@ function createRepository() {
   return repository;
 }
 
-function inspect(repository) {
+function inspect(repository, revision = null) {
   return spawnSync(
     process.execPath,
-    [checker, "--repository-root", repository],
+    [
+      checker,
+      "--repository-root",
+      repository,
+      ...(revision ? ["--revision", revision] : []),
+    ],
     { encoding: "utf8" },
   );
 }
@@ -86,6 +91,27 @@ test("public-boundary check scans secrets in reachable history", () => {
     assert.equal(historyLeak.status, 1);
     assert.match(historyLeak.stderr, /reachable history/i);
     assert.match(historyLeak.stderr, /possible private key/i);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("public-boundary check scans an exact detached revision tree", () => {
+  const repository = createRepository();
+  try {
+    git(repository, "switch", "--detach", "--quiet");
+    mkdirSync(join(repository, "runtime"));
+    writeFileSync(
+      join(repository, "runtime/installation.json"),
+      "Synthetic private fixture.\n",
+    );
+    git(repository, "add", "runtime/installation.json");
+    git(repository, "commit", "--quiet", "-m", "detached candidate");
+
+    const result = inspect(repository, "HEAD");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /revision [0-9a-f]{40} tree/i);
+    assert.match(result.stderr, /runtime\/installation\.json/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
