@@ -28,6 +28,14 @@ Closes #
 - Exact reviewed head:
 - Findings and dispositions:
 
+## Supplemental Copilot review
+
+<!-- Record `Not requested - <reason>` or `Completed`; this is not an approval. -->
+
+- Status:
+- Exact reviewed head (when completed):
+- Copilot findings and dispositions:
+
 ## Agent and AI assistance
 
 - Material assistance used:

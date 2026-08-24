@@ -79,8 +79,19 @@ advances and GitHub requires an update, rebase the issue branch, push it with
 `--force-with-lease`, and treat every rewritten commit as a new candidate.
 Force updates never target `main`.
 
+With maintainer authorization, request a supplemental Copilot code review after
+the candidate head is stable. Record either `Not requested - <reason>` or
+`Completed`; a completed review names the exact head and dispositions every
+finding. Copilot review does not replace `Verify`, the independent review, or
+maintainer merge authority. A changed head supersedes its Copilot review
+evidence; request a new review only when the maintainer authorizes that external
+action and the evidence remains useful. Before handoff, record each finding's
+disposition in the pull request and resolve its GitHub review thread.
+
 Completion criterion: required CI and independent review both name the current
-head, with every finding fixed or explicitly dispositioned.
+head, with every finding fixed or explicitly dispositioned. The supplemental
+Copilot field either explains why it was not requested or names the current
+head and dispositions its findings.
 
 ## 5. Hand off the merge decision
 
