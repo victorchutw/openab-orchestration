@@ -5,6 +5,8 @@ import { parentPort, workerData } from "node:worker_threads";
 const waitState = new Int32Array(new SharedArrayBuffer(4));
 const activeDatabasePath = join(workerData.primaryRoot, "runtime-core.sqlite3");
 
+parentPort.postMessage({ status: "ready" });
+
 for (;;) {
   let candidateExists = false;
   try {
