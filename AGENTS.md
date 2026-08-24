@@ -15,6 +15,10 @@ Before implementing an authorized ticket, read
 `docs/agents/implementation-loop.md`. Work on one eligible leaf ticket through
 its bounded implementation, independent review, and human handoff.
 
+Before creating a branch, publishing a pull request, or completing a merge,
+read `docs/agents/pull-request-workflow.md`. Keep one ticket on one short-lived
+branch and preserve the exact reviewed pull-request head through handoff.
+
 ## Domain language
 
 Read `CONTEXT.md` when changing product concepts. Update it only when a term is

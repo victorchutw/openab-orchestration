@@ -49,6 +49,7 @@ test("contribution, conduct, and security terms preserve human accountability", 
 
   const agentInstructions = read("AGENTS.md");
   assert.match(agentInstructions, /docs\/agents\/implementation-loop\.md/);
+  assert.match(agentInstructions, /docs\/agents\/pull-request-workflow\.md/);
 
   const implementationLoop = read("docs/agents/implementation-loop.md");
   assert.match(implementationLoop, /maintainer-triggered/i);
@@ -62,6 +63,26 @@ test("contribution, conduct, and security terms preserve human accountability", 
   assert.match(implementationLoop, /current ticket is merged/i);
   assert.match(implementationLoop, /required CI check has completed successfully/i);
   assert.match(implementationLoop, /recommend exactly one next ticket/i);
+
+  const pullRequestWorkflow = read("docs/agents/pull-request-workflow.md");
+  assert.match(pullRequestWorkflow, /issue-<number>-<slug>/);
+  assert.match(pullRequestWorkflow, /git commit --signoff/);
+  assert.match(pullRequestWorkflow, /Closes #<number>/);
+  assert.match(pullRequestWorkflow, /required GitHub check is `Verify`/);
+  assert.match(pullRequestWorkflow, /independent reviewer/i);
+  assert.match(pullRequestWorkflow, /gh pr merge --rebase --delete-branch/);
+  assert.match(pullRequestWorkflow, /zero GitHub approvals/i);
+
+  const pullRequestTemplate = read(".github/pull_request_template.md");
+  assert.match(pullRequestTemplate, /Acceptance evidence/);
+  assert.match(pullRequestTemplate, /Agent and AI assistance/);
+  assert.match(pullRequestTemplate, /Public boundary/);
+  assert.match(pullRequestTemplate, /Rebase merge explicitly authorized/);
+
+  const continuousIntegration = read(".github/workflows/ci.yml");
+  assert.match(continuousIntegration, /name: Verify/);
+  assert.match(continuousIntegration, /node scripts\/check-dco\.mjs/);
+  assert.match(continuousIntegration, /npm run check:public -- --revision HEAD/);
 
   const conduct = read("CODE_OF_CONDUCT.md");
   assert.match(conduct, /Contributor Covenant.*version 2\.1/is);

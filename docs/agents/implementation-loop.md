@@ -22,9 +22,14 @@ to it by linked title in human-facing text. The claim is the trigger for one
 implementation loop; it does not authorize another ticket or a wider product
 change.
 
+Create one short-lived issue branch from the current `origin/main` according to
+`docs/agents/pull-request-workflow.md`. The branch is the writable publication
+line for this ticket, not workflow authority or proof of completion.
+
 Completion criterion: the ticket remains open and unblocked, its assignee is
-the current implementer, and its parent specification, acceptance criteria, and
-relevant repository guidance have been read.
+the current implementer, its issue branch names only that ticket, and its parent
+specification, acceptance criteria, and relevant repository guidance have been
+read.
 
 ## 2. Freeze the work contract
 
@@ -70,6 +75,11 @@ Run ticket-specific checks first, then the clean-checkout entry points in
 `CONTRIBUTING.md`. Inspect the complete diff, generated artifacts, and working
 tree so the review target is exact.
 
+When pull-request publication is authorized, use the pull-request head commit
+as the review identity and require its `Verify` check to pass. A changed head
+supersedes earlier CI and review evidence; attach each result to the commit it
+actually evaluated.
+
 Have one independent reviewer inspect the same candidate against both the
 ticket and repository standards. The reviewer may be a responsible human or a
 separate read-only agent/session; the maker does not act as the only checker.
@@ -107,7 +117,8 @@ The handoff names the linked ticket and reports:
 - public-boundary relevance.
 
 Before ending the session, persist that record as an English, non-sensitive
-comment on the linked ticket or pull request. Identify the exact candidate with
+comment on the pull request when one exists, otherwise on the linked ticket.
+Identify the exact candidate with
 an immutable commit or pull-request head, a staged-tree ID, or a digest that
 covers every changed path and its content. This public evidence summary is not
 an Evidence Bundle: exclude credentials, private bindings, runtime data,

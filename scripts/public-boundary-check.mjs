@@ -39,12 +39,20 @@ const SENSITIVE_CONTENT = [
 ];
 
 function parseArguments(args) {
-  if (args.length !== 2 || args[0] !== "--repository-root") {
+  if (
+    (args.length !== 2 && args.length !== 4) ||
+    args[0] !== "--repository-root" ||
+    (args.length === 4 && args[2] !== "--revision")
+  ) {
     throw new Error(
-      "Usage: public-boundary-check --repository-root <checkout>",
+      "Usage: public-boundary-check --repository-root <checkout> " +
+        "[--revision <commit>]",
     );
   }
-  return resolve(args[1]);
+  return {
+    repositoryRoot: resolve(args[1]),
+    revision: args.length === 4 ? args[3] : null,
+  };
 }
 
 function git(repositoryRoot, args, encoding) {
@@ -95,6 +103,42 @@ function inspectStagedTree(repositoryRoot, findings) {
   return paths.length;
 }
 
+function inspectRevisionTree(repositoryRoot, revision, findings) {
+  const commit = git(
+    repositoryRoot,
+    ["rev-parse", "--verify", "--end-of-options", `${revision}^{commit}`],
+    "utf8",
+  ).trim();
+  const entries = splitNullTerminated(
+    git(
+      repositoryRoot,
+      ["ls-tree", "-r", "-z", "--full-tree", commit],
+      "utf8",
+    ),
+  );
+  let blobCount = 0;
+  for (const entry of entries) {
+    const separator = entry.indexOf("\t");
+    if (separator === -1) {
+      continue;
+    }
+    const [mode, type, oid] = entry.slice(0, separator).split(" ");
+    const path = entry.slice(separator + 1);
+    if (!mode || type !== "blob" || !oid) {
+      continue;
+    }
+    blobCount += 1;
+    inspectPath(path, `revision ${commit} tree`, findings);
+    inspectContent(
+      git(repositoryRoot, ["cat-file", "blob", oid]),
+      path,
+      `revision ${commit} tree`,
+      findings,
+    );
+  }
+  return { commit, blobCount };
+}
+
 function inspectReachableHistory(repositoryRoot, findings) {
   const objects = git(repositoryRoot, ["rev-list", "--objects", "--all"], "utf8")
     .split("\n")
@@ -129,10 +173,13 @@ function inspectReachableHistory(repositoryRoot, findings) {
 }
 
 function main(args) {
-  const repositoryRoot = parseArguments(args);
+  const { repositoryRoot, revision } = parseArguments(args);
   git(repositoryRoot, ["rev-parse", "--is-inside-work-tree"], "utf8");
   const findings = [];
   const stagedCount = inspectStagedTree(repositoryRoot, findings);
+  const revisionResult = revision
+    ? inspectRevisionTree(repositoryRoot, revision, findings)
+    : null;
   const historyCount = inspectReachableHistory(repositoryRoot, findings);
 
   if (findings.length > 0) {
@@ -147,6 +194,10 @@ function main(args) {
   process.stdout.write(
     "Public-boundary automated checks passed for " +
       `the staged tree (${stagedCount} paths) and ` +
+      (revisionResult
+        ? `revision ${revisionResult.commit} tree ` +
+          `(${revisionResult.blobCount} blobs) and `
+        : "") +
       `reachable history (${historyCount} blobs). ` +
       "Human exposure review is still required before public push; " +
       "automated checks and ignore rules are defense in depth.\n",
