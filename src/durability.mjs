@@ -28,7 +28,7 @@ import {
   requireNonEmptyString,
 } from "./canonical.mjs";
 
-const DURABILITY_SCHEMA_VERSION = 1;
+const DURABILITY_SCHEMA_VERSION = 2;
 const DURABILITY_GENESIS_COMMIT_ID = "GENESIS";
 
 function durabilityDatabasePath(primaryRoot) {
@@ -235,6 +235,12 @@ function durabilityOpenDatabase(primaryRoot) {
       request_digest TEXT NOT NULL,
       capsule_digest TEXT NOT NULL UNIQUE
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS run_revisions (
+      revision INTEGER PRIMARY KEY,
+      commit_id TEXT NOT NULL UNIQUE REFERENCES commit_identities(commit_id),
+      run_id TEXT NOT NULL REFERENCES runs(run_id),
+      projection_json TEXT NOT NULL
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS request_receipts (
       request_id TEXT PRIMARY KEY,
       request_digest TEXT NOT NULL,
@@ -317,6 +323,14 @@ function durabilityOpenDatabase(primaryRoot) {
     CREATE TRIGGER IF NOT EXISTS immutable_audit_records_delete
       BEFORE DELETE ON audit_records BEGIN
         SELECT RAISE(ABORT, 'audit records are immutable');
+      END;
+    CREATE TRIGGER IF NOT EXISTS immutable_run_revisions_update
+      BEFORE UPDATE ON run_revisions BEGIN
+        SELECT RAISE(ABORT, 'Run revisions are immutable');
+      END;
+    CREATE TRIGGER IF NOT EXISTS immutable_run_revisions_delete
+      BEFORE DELETE ON run_revisions BEGIN
+        SELECT RAISE(ABORT, 'Run revisions are immutable');
       END;
     CREATE TRIGGER IF NOT EXISTS immutable_recovery_activations_update
       BEFORE UPDATE ON recovery_activations BEGIN
@@ -531,18 +545,30 @@ function durabilitySealCapsule(body) {
 }
 
 function durabilityCanonicalRequestContent(content) {
-  const payload =
-    content?.action?.kind === "Restore"
-      ? { recoveryPoint: content?.action?.payload?.recoveryPoint }
-      : { objective: content?.action?.payload?.objective };
+  if (content?.kind === "Report") {
+    return {
+      kind: content.kind,
+      agentRoleIdentity: content.agentRoleIdentity,
+      factId: content.factId,
+      directive: content.directive,
+      result: structuredClone(content.result),
+      evidence: structuredClone(content.evidence),
+    };
+  }
   return {
     principal: content?.principal,
     offer: content?.offer,
     action: {
       kind: content?.action?.kind,
-      payload,
+      payload: structuredClone(content?.action?.payload),
     },
   };
+}
+
+function durabilityRequestActionKind(content) {
+  return content?.kind === "Report"
+    ? "ReportPlanningResult"
+    : content?.action?.kind;
 }
 
 function durabilityVerifyCapsule(capsule) {
@@ -559,6 +585,9 @@ function durabilityVerifyCapsule(capsule) {
   );
   if (!Array.isArray(capsule.artifacts)) {
     throw new Error("recovery capsule artifacts are invalid");
+  }
+  if (!Array.isArray(capsule.mutations?.createdOffers)) {
+    throw new Error("recovery capsule created offers are invalid");
   }
   const artifactDigests = new Set();
   for (const artifact of capsule.artifacts) {
@@ -577,14 +606,83 @@ function durabilityVerifyCapsule(capsule) {
       canonicalJson(
         durabilityCanonicalRequestContent(capsule.request.content),
       ) ||
-    canonicalDigest(capsule.request.content) !== capsule.request.digest ||
+    canonicalDigest(capsule.request.content) !== capsule.request.digest
+  ) {
+    throw new Error(
+      "capsule mutations do not match the original request payload",
+    );
+  }
+  if (capsule.authorization?.kind === "ExecutionDirective") {
+    const execution = capsule.mutations.run?.planningExecution;
+    if (
+      capsule.request.content.kind !== "Report" ||
+      capsule.request.content.agentRoleIdentity !== capsule.audit.principal ||
+      capsule.request.content.directive !== capsule.authorization.capability ||
+      capsule.request.content.result?.executionId !==
+        capsule.authorization.executionId ||
+      capsule.request.content.result?.executionId !== execution?.id ||
+      capsule.request.content.result?.runPlan === undefined ||
+      canonicalJson(capsule.request.content.result.runPlan) !==
+        canonicalJson(capsule.mutations.run?.plan) ||
+      capsule.request.content.result?.agentRoleIdentity !==
+        capsule.authorization.agentRoleIdentity ||
+      canonicalDigest(execution?.directive?.executionProfile) !==
+        capsule.authorization.executionProfileDigest ||
+      canonicalDigest(execution?.directive?.executionContext) !==
+        capsule.authorization.executionContextDigest ||
+      execution?.directive?.effectIntent?.id !==
+        capsule.authorization.effectIntentId ||
+      execution?.status !== "Completed"
+    ) {
+      throw new Error(
+        "capsule Planning result does not match its directive and Run mutation",
+      );
+    }
+  } else if (
+    capsule.authorization?.kind !== "OperatorOffer" ||
     capsule.request.content.offer !== capsule.mutations.consumedOffer ||
     capsule.request.content.principal !== capsule.audit.principal ||
     capsule.request.content.action?.kind !== capsule.audit.actionKind ||
-    capsule.authorization?.principal !== capsule.audit.principal ||
-    capsule.authorization?.actionKind !== capsule.audit.actionKind ||
-    capsule.request.content.action?.payload?.objective !==
-      capsule.mutations.run?.objective
+    capsule.authorization.principal !== capsule.audit.principal ||
+    capsule.authorization.actionKind !== capsule.audit.actionKind ||
+    (capsule.audit.actionKind === "SubmitObjective" &&
+      capsule.request.content.action?.payload?.objective !==
+        capsule.mutations.run?.objective) ||
+    (capsule.audit.actionKind === "RevisePlan" &&
+      capsule.request.content.action?.payload?.guidance !==
+        capsule.mutations.run?.planningExecution?.directive?.executionContext
+          ?.revisionGuidance) ||
+    (capsule.audit.actionKind === "ConfirmPlan" &&
+      (capsule.mutations.run?.stage !== "Coding" ||
+        capsule.mutations.run?.condition !== "Active" ||
+        capsule.mutations.run?.confirmedPlan?.format !==
+          "openab.run-plan/v1" ||
+        capsule.mutations.run.confirmedPlan.planRevision !==
+          capsule.mutations.run.planRevision ||
+        capsule.mutations.run.confirmedPlan.confirmedAt !==
+          capsule.audit.recordedAt ||
+        canonicalJson({
+          ...capsule.mutations.run.confirmedPlan,
+          format: undefined,
+          planRevision: undefined,
+          confirmedAt: undefined,
+        }) !==
+          canonicalJson({
+            ...capsule.mutations.run.plan,
+            format: undefined,
+            planRevision: undefined,
+            confirmedAt: undefined,
+          }))) ||
+    (capsule.audit.actionKind === "AbandonRun" &&
+      (capsule.request.content.action?.payload?.reason !==
+        capsule.mutations.run?.abandonmentReason ||
+        (capsule.mutations.run.condition === "Terminal"
+          ? capsule.mutations.run.outcome !== "Abandoned"
+          : capsule.mutations.run.condition !== "Cancelling"))) ||
+    (capsule.audit.actionKind === "CancelRun" &&
+      (capsule.mutations.run?.condition === "Terminal"
+        ? capsule.mutations.run.outcome !== "Cancelled"
+        : capsule.mutations.run?.condition !== "Cancelling"))
   ) {
     throw new Error(
       "capsule mutations do not match the original request payload",
@@ -1752,7 +1850,8 @@ function durabilityVerifyReceiptCapsule(capsule) {
     canonicalDigest(capsule.request.content) !== capsule.request.digest ||
     capsule.receipt?.status !== "rejected" ||
     capsule.receipt.requestId !== capsule.request.id ||
-    capsule.receipt.actionKind !== capsule.request.content.action?.kind ||
+    capsule.receipt.actionKind !==
+      durabilityRequestActionKind(capsule.request.content) ||
     canonicalJson(capsule.receipt.cursor) !== canonicalJson(capsule.cursor)
   ) {
     throw new Error("recovery rejection receipt capsule is inconsistent");
@@ -1986,20 +2085,44 @@ function durabilityApplyCapsule(
     ) {
       throw new Error("recovery capsule authority or configuration is stale");
     }
-    const offer = state.offers.find(
-      (candidate) => candidate.offer === capsule.mutations.consumedOffer,
-    );
-    if (
-      offer === undefined ||
-      offer.principal !== capsule.audit.principal ||
-      offer.revision !== state.cursor.revision ||
-      offer.authorityEpoch !== capsule.authorityEpoch ||
-      offer.actionKind !== capsule.audit.actionKind ||
-      canonicalDigest(offer.constraints) !==
-        capsule.authorization.offerConstraintsDigest ||
-      offer.consumedRevision !== null
-    ) {
-      throw new Error("recovery capsule no longer has its authoritative offer");
+    if (capsule.authorization.kind === "OperatorOffer") {
+      const offer = state.offers.find(
+        (candidate) => candidate.offer === capsule.mutations.consumedOffer,
+      );
+      if (
+        offer === undefined ||
+        offer.principal !== capsule.audit.principal ||
+        offer.revision !== state.cursor.revision ||
+        offer.authorityEpoch !== capsule.authorityEpoch ||
+        offer.actionKind !== capsule.audit.actionKind ||
+        canonicalDigest(offer.constraints) !==
+          capsule.authorization.offerConstraintsDigest ||
+        offer.consumedRevision !== null
+      ) {
+        throw new Error(
+          "recovery capsule no longer has its authoritative offer",
+        );
+      }
+    } else {
+      const execution = state.run?.planningExecution;
+      if (
+        capsule.authorization.kind !== "ExecutionDirective" ||
+        execution?.status !== "Pending" ||
+        execution.id !== capsule.authorization.executionId ||
+        execution.directive.capability !== capsule.authorization.capability ||
+        execution.directive.agentRoleIdentity !==
+          capsule.authorization.agentRoleIdentity ||
+        canonicalDigest(execution.directive.executionProfile) !==
+          capsule.authorization.executionProfileDigest ||
+        canonicalDigest(execution.directive.executionContext) !==
+          capsule.authorization.executionContextDigest ||
+        execution.directive.effectIntent.id !==
+          capsule.authorization.effectIntentId
+      ) {
+        throw new Error(
+          "recovery capsule no longer has its authoritative Execution directive",
+        );
+      }
     }
     for (const artifact of capsule.artifacts) {
       const bytes = durabilityVerifyObject(layout.recoveryRoot, artifact);
@@ -2047,22 +2170,41 @@ function durabilityApplyCapsule(
         .run(capsule.commitId, artifact.digest);
     }
     const run = capsule.mutations.run;
+    if (capsule.mutations.runCreated) {
+      database
+        .prepare(
+          `INSERT INTO runs
+             (run_id, objective, stage, condition, review_round, outcome,
+              created_at, created_revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          run.id,
+          run.objective,
+          run.stage,
+          run.condition,
+          run.reviewRound,
+          run.outcome,
+          run.createdAt,
+          capsule.revision,
+        );
+    } else if (
+      database.prepare("SELECT 1 FROM runs WHERE run_id = ?").get(run.id) ===
+      undefined
+    ) {
+      throw new Error("Run update has no authoritative created Run");
+    }
     database
       .prepare(
-        `INSERT INTO runs
-           (run_id, objective, stage, condition, review_round, outcome,
-            created_at, created_revision)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO run_revisions
+           (revision, commit_id, run_id, projection_json)
+         VALUES (?, ?, ?, ?)`,
       )
       .run(
-        run.id,
-        run.objective,
-        run.stage,
-        run.condition,
-        run.reviewRound,
-        run.outcome,
-        run.createdAt,
         capsule.revision,
+        capsule.commitId,
+        run.id,
+        canonicalJson(run),
       );
     database
       .prepare(
@@ -2104,11 +2246,37 @@ function durabilityApplyCapsule(
           effect.disposition,
         );
     }
-    database
-      .prepare(
-        "UPDATE operator_offers SET consumed_revision = ? WHERE offer = ?",
-      )
-      .run(capsule.revision, capsule.mutations.consumedOffer);
+    if (capsule.mutations.consumedOffer !== null) {
+      database
+        .prepare(
+          "UPDATE operator_offers SET consumed_revision = ? WHERE offer = ?",
+        )
+        .run(capsule.revision, capsule.mutations.consumedOffer);
+    }
+    for (const offer of capsule.mutations.createdOffers) {
+      if (
+        offer.revision !== capsule.revision ||
+        offer.authorityEpoch !== capsule.authorityEpoch ||
+        offer.consumedRevision !== null
+      ) {
+        throw new Error("created Operator offer is not bound to its commit");
+      }
+      database
+        .prepare(
+          `INSERT INTO operator_offers
+             (offer, principal, revision, authority_epoch, action_kind,
+              constraints_json, consumed_revision)
+           VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+        )
+        .run(
+          offer.offer,
+          offer.principal,
+          offer.revision,
+          offer.authorityEpoch,
+          offer.actionKind,
+          canonicalJson(offer.constraints),
+        );
+    }
     database
       .prepare(
         `UPDATE current_projection
@@ -2218,34 +2386,47 @@ function durabilityVerifyCommit(database, capsules, commitId, layout) {
     durabilityVerifyObject(layout.primaryRoot, artifact);
     durabilityVerifyObject(layout.recoveryRoot, artifact);
   }
-  const runRow = database
+  if (capsule.mutations.runCreated) {
+    const runRow = database
+      .prepare(
+        `SELECT run_id, objective, stage, condition, review_round, outcome,
+                created_at, created_revision
+         FROM runs WHERE run_id = ?`,
+      )
+      .get(capsule.mutations.run.id);
+    const expectedRunRow = {
+      run_id: capsule.mutations.run.id,
+      objective: capsule.mutations.run.objective,
+      stage: capsule.mutations.run.stage,
+      condition: capsule.mutations.run.condition,
+      review_round: capsule.mutations.run.reviewRound,
+      outcome: capsule.mutations.run.outcome,
+      created_at: capsule.mutations.run.createdAt,
+      created_revision: capsule.revision,
+    };
+    if (
+      runRow === undefined ||
+      canonicalJson({ ...runRow }) !== canonicalJson(expectedRunRow)
+    ) {
+      throw new Error("authoritative created Run differs from its capsule");
+    }
+  }
+  const runRevision = database
     .prepare(
-      `SELECT run_id, objective, stage, condition, review_round, outcome,
-              created_at, created_revision
-       FROM runs WHERE run_id = ?`,
+      `SELECT commit_id, run_id, projection_json
+       FROM run_revisions WHERE revision = ?`,
     )
-    .get(capsule.mutations.run.id);
-  const expectedRunRow = {
-    run_id: capsule.mutations.run.id,
-    objective: capsule.mutations.run.objective,
-    stage: capsule.mutations.run.stage,
-    condition: capsule.mutations.run.condition,
-    review_round: capsule.mutations.run.reviewRound,
-    outcome: capsule.mutations.run.outcome,
-    created_at: capsule.mutations.run.createdAt,
-    created_revision: capsule.revision,
-  };
+    .get(capsule.revision);
   if (
-    runRow === undefined ||
-    canonicalJson({ ...runRow }) !== canonicalJson(expectedRunRow)
+    runRevision === undefined ||
+    runRevision.commit_id !== capsule.commitId ||
+    runRevision.run_id !== capsule.mutations.run.id ||
+    runRevision.projection_json !== canonicalJson(capsule.mutations.run)
   ) {
-    throw new Error("authoritative Run projection differs from its capsule");
+    throw new Error("authoritative Run revision differs from its capsule");
   }
   const state = durabilityReadState(database);
   if (state.cursor.commitId === capsule.commitId) {
-    const consumedOffer = state.offers.find(
-      (offer) => offer.offer === capsule.mutations.consumedOffer,
-    );
     if (
       state.cursor.revision !== capsule.revision ||
       canonicalJson(state.run) !== canonicalJson(capsule.mutations.run) ||
@@ -2255,17 +2436,42 @@ function durabilityVerifyCommit(database, capsules, commitId, layout) {
         "authoritative current projection differs from its capsule",
       );
     }
-    if (
-      consumedOffer === undefined ||
-      consumedOffer.consumedRevision !== capsule.revision ||
-      consumedOffer.authorityEpoch !== capsule.authorityEpoch ||
-      consumedOffer.principal !== capsule.request.content.principal ||
-      consumedOffer.actionKind !== capsule.request.content.action.kind ||
-      canonicalDigest(consumedOffer.constraints) !==
-        capsule.authorization.offerConstraintsDigest
-    ) {
-      throw new Error("authoritative offer state differs from its capsule");
+    if (capsule.authorization.kind === "OperatorOffer") {
+      const consumedOffer = state.offers.find(
+        (offer) => offer.offer === capsule.mutations.consumedOffer,
+      );
+      if (
+        consumedOffer === undefined ||
+        consumedOffer.consumedRevision !== capsule.revision ||
+        consumedOffer.authorityEpoch !== capsule.authorityEpoch ||
+        consumedOffer.principal !== capsule.request.content.principal ||
+        consumedOffer.actionKind !== capsule.request.content.action.kind ||
+        canonicalDigest(consumedOffer.constraints) !==
+          capsule.authorization.offerConstraintsDigest
+      ) {
+        throw new Error("authoritative offer state differs from its capsule");
+      }
     }
+  }
+  const createdOffers = state.offers
+    .filter((offer) => offer.revision === capsule.revision)
+    .map((offer) => ({
+      offer: offer.offer,
+      principal: offer.principal,
+      revision: offer.revision,
+      authorityEpoch: offer.authorityEpoch,
+      actionKind: offer.actionKind,
+      constraints: offer.constraints,
+    }));
+  if (
+    canonicalJson(createdOffers) !==
+    canonicalJson(
+      capsule.mutations.createdOffers.map(
+        ({ consumedRevision: ignored, ...offer }) => offer,
+      ),
+    )
+  ) {
+    throw new Error("authoritative created offers differ from their capsule");
   }
   return capsule;
 }
@@ -2290,7 +2496,38 @@ function durabilityRecoverAndVerify(
         throw new Error("genesis projection has an invalid commit identity");
       }
     } else {
-      durabilityVerifyCommit(database, capsules, state.cursor.commitId, layout);
+      const identities = database
+        .prepare(
+          `SELECT commit_id, predecessor, revision
+           FROM commit_identities ORDER BY revision`,
+        )
+        .all();
+      const head = identities.at(-1);
+      if (
+        head?.commit_id !== state.cursor.commitId ||
+        head?.revision !== state.cursor.revision
+      ) {
+        throw new Error(
+          "authoritative current projection differs from its capsule",
+        );
+      }
+      if (identities.length !== state.cursor.revision) {
+        throw new Error("authoritative commit history is not contiguous");
+      }
+      let predecessor = DURABILITY_GENESIS_COMMIT_ID;
+      for (const [index, identity] of identities.entries()) {
+        if (
+          identity.revision !== index + 1 ||
+          identity.predecessor !== predecessor
+        ) {
+          throw new Error("authoritative commit history is not contiguous");
+        }
+        durabilityVerifyCommit(database, capsules, identity.commit_id, layout);
+        predecessor = identity.commit_id;
+      }
+      if (predecessor !== state.cursor.commitId) {
+        throw new Error("authoritative cursor is not the commit history head");
+      }
     }
     durabilityRecoverReceiptCapsules(database, layout, true);
   });
@@ -2344,13 +2581,18 @@ function durabilityBuildCapsule(database, candidate) {
     receipt: candidate.receipt,
     mutations: {
       run: candidate.run,
+      runCreated: candidate.createsRun ?? true,
       consumedOffer: candidate.consumedOffer,
+      createdOffers: candidate.createdOffers ?? [],
     },
-    authorization: {
-      principal: candidate.requestContent.principal,
-      actionKind: candidate.requestContent.action.kind,
-      offerConstraintsDigest: candidate.offerConstraintsDigest,
-    },
+    authorization:
+      candidate.authorization ??
+      {
+        kind: "OperatorOffer",
+        principal: candidate.requestContent.principal,
+        actionKind: candidate.requestContent.action.kind,
+        offerConstraintsDigest: candidate.offerConstraintsDigest,
+      },
     audit: candidate.audit,
     effectIntents: candidate.effectIntents,
     artifacts: candidate.artifacts

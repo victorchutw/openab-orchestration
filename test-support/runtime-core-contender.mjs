@@ -7,6 +7,13 @@ const core = openRuntimeCore({
   primaryRoot: workerData.primaryRoot,
   recoveryRoot: workerData.recoveryRoot,
   operatorIdentity: "operator:test",
+  orchestratorIdentity: "agent-role:orchestrator",
+  planningExecutionProfile: {
+    id: "profile:orchestrator-scripted-1",
+    servingProvider: "scripted",
+    model: "scripted-plan-v1",
+    runtime: "in-memory",
+  },
   configurationRevision: "configuration:test-1",
   effectiveConfigurationDigest: `sha256:${"a".repeat(64)}`,
   secretReferenceGenerations: {

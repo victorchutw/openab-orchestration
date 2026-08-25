@@ -24,13 +24,23 @@ import { canonicalDigest } from "../src/canonical.mjs";
 import { openDurability } from "../src/durability.mjs";
 
 const OPERATOR_ID = "operator:test";
+const ORCHESTRATOR_ID = "agent-role:orchestrator";
 const CONFIGURATION_DIGEST = `sha256:${"a".repeat(64)}`;
+const PLANNING_PROFILE = Object.freeze({
+  id: "profile:orchestrator-scripted-1",
+  servingProvider: "scripted",
+  model: "scripted-plan-v1",
+  runtime: "in-memory",
+});
 
 function runtimeCoreOptions(primaryRoot, recoveryRoot) {
+  let operatorOfferSequence = 0;
   return {
     primaryRoot,
     recoveryRoot,
     operatorIdentity: OPERATOR_ID,
+    orchestratorIdentity: ORCHESTRATOR_ID,
+    planningExecutionProfile: PLANNING_PROFILE,
     configurationRevision: "configuration:test-1",
     effectiveConfigurationDigest: CONFIGURATION_DIGEST,
     secretReferenceGenerations: {
@@ -44,6 +54,10 @@ function runtimeCoreOptions(primaryRoot, recoveryRoot) {
       run: () => "run:test-1",
       commit: () => "commit:test-1",
       effectIntent: () => "effect-intent:test-1",
+      execution: () => "execution:planning-test-1",
+      directive: () => "directive:planning-test-1",
+      operatorOffer: () =>
+        `offer:planning-action-${(operatorOfferSequence += 1)}`,
     },
   };
 }
@@ -71,6 +85,133 @@ function withRuntimeCore(testBody) {
   ).finally(() => {
       core.close();
       rmSync(root, { recursive: true, force: true });
+  });
+}
+
+function withPlanningRuntimeCore(testBody, { clock } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "openab-planning-runtime-core-"));
+  const primaryRoot = join(root, "primary");
+  const recoveryRoot = join(root, "recovery");
+  mkdirSync(primaryRoot);
+  mkdirSync(recoveryRoot);
+  let commitSequence = 0;
+  let effectSequence = 0;
+  let executionSequence = 0;
+  let directiveSequence = 0;
+  let operatorOfferSequence = 0;
+  const baseOptions = runtimeCoreOptions(primaryRoot, recoveryRoot);
+  const options = {
+    ...baseOptions,
+    clock: clock ?? baseOptions.clock,
+    identifiers: {
+      ...baseOptions.identifiers,
+      commit: () => `commit:test-${(commitSequence += 1)}`,
+      effectIntent: () => `effect-intent:test-${(effectSequence += 1)}`,
+      execution: () => `execution:planning-test-${(executionSequence += 1)}`,
+      directive: () => `directive:planning-test-${(directiveSequence += 1)}`,
+      operatorOffer: () =>
+        `offer:planning-action-${(operatorOfferSequence += 1)}`,
+    },
+  };
+  let core = openRuntimeCore(options);
+
+  return Promise.resolve(
+    testBody({
+      core,
+      options,
+      primaryRoot,
+      close() {
+        core.close();
+        core = undefined;
+      },
+      reopen() {
+        core.close();
+        core = openRuntimeCore(options);
+        return core;
+      },
+    }),
+  ).finally(() => {
+    core?.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+}
+
+function validPlanningResult({
+  executionId = "execution:planning-test-1",
+  planRevision = 1,
+  objective = "Prepare an execution-ready plan",
+} = {}) {
+  return {
+    format: "openab.planning-execution-result/v1",
+    executionId,
+    planRevision,
+    agentRoleIdentity: ORCHESTRATOR_ID,
+    executionProfileId: PLANNING_PROFILE.id,
+    outcome: "Succeeded",
+    runPlan: {
+      objective,
+      scope: ["Runtime Core planning lifecycle"],
+      acceptanceBoundary: ["The Operator confirms a durable plan"],
+      evidenceRequirements: ["Runtime Core behavioral tests pass"],
+      remediationAllowance: { maximumRounds: 1 },
+      eligibleExecutionProfiles: {
+        coding: ["profile:coding-primary", "profile:coding-fallback"],
+        reviewerA: ["profile:reviewer-a-primary"],
+        reviewerB: ["profile:reviewer-b-primary"],
+      },
+      fallbackOrder: {
+        coding: ["profile:coding-primary", "profile:coding-fallback"],
+        reviewerA: ["profile:reviewer-a-primary"],
+        reviewerB: ["profile:reviewer-b-primary"],
+      },
+      reviewerDiversityMode: "distinct-serving-providers",
+    },
+  };
+}
+
+function planningEvidence(result) {
+  return [
+    {
+      format: "openab.verification-evidence/v1",
+      kind: "ScriptedPlanningResult",
+      resultDigest: canonicalDigest(result),
+    },
+  ];
+}
+
+async function completePlanningExecution(core, result = validPlanningResult()) {
+  const initial = await core.operator({
+    kind: "Observe",
+    principal: OPERATOR_ID,
+    locale: "en",
+  });
+  await core.operator({
+    kind: "Act",
+    principal: OPERATOR_ID,
+    locale: "en",
+    requestId: "request:start-planning",
+    offer: initial.offers[0].offer,
+    action: {
+      kind: "SubmitObjective",
+      payload: { objective: "Prepare an execution-ready plan" },
+    },
+  });
+  const pulled = await core.execution({
+    kind: "Pull",
+    agentRoleIdentity: ORCHESTRATOR_ID,
+  });
+  await core.execution({
+    kind: "Report",
+    agentRoleIdentity: ORCHESTRATOR_ID,
+    factId: "fact:planning-result-1",
+    directive: pulled.directive.capability,
+    result,
+    evidence: planningEvidence(result),
+  });
+  return core.operator({
+    kind: "Observe",
+    principal: OPERATOR_ID,
+    locale: "en",
   });
 }
 
@@ -163,6 +304,7 @@ function addConflictingGeneration(recoveryRoot) {
       database.exec("DROP TRIGGER immutable_commit_identities_update");
       database.exec("DROP TRIGGER immutable_request_receipts_update");
       database.exec("DROP TRIGGER immutable_audit_records_update");
+      database.exec("DROP TRIGGER immutable_run_revisions_update");
       database
         .prepare(
           `UPDATE commit_identities
@@ -197,6 +339,9 @@ function addConflictingGeneration(recoveryRoot) {
         .run(conflictingCapsule.commitId, originalCapsule.commitId);
       database
         .prepare("UPDATE effect_intents SET commit_id = ? WHERE commit_id = ?")
+        .run(conflictingCapsule.commitId, originalCapsule.commitId);
+      database
+        .prepare("UPDATE run_revisions SET commit_id = ? WHERE commit_id = ?")
         .run(conflictingCapsule.commitId, originalCapsule.commitId);
       database
         .prepare(
@@ -253,6 +398,7 @@ function addSecondRevisionGeneration(recoveryRoot) {
   };
   secondCapsule.audit.runId = secondCapsule.receipt.runId;
   secondCapsule.effectIntents = [];
+  secondCapsule.mutations.createdOffers = [];
   delete secondCapsule.capsuleDigest;
   secondCapsule.capsuleDigest = capsuleDigest(secondCapsule);
   writeFileSync(
@@ -323,6 +469,18 @@ function addSecondRevisionGeneration(recoveryRoot) {
           secondCapsule.commitId,
           secondCapsule.audit.actionKind,
           JSON.stringify(canonicalize(secondCapsule.audit)),
+        );
+      database
+        .prepare(
+          `INSERT INTO run_revisions
+             (revision, commit_id, run_id, projection_json)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run(
+          secondCapsule.revision,
+          secondCapsule.commitId,
+          secondCapsule.mutations.run.id,
+          JSON.stringify(canonicalize(secondCapsule.mutations.run)),
         );
       database
         .prepare(
@@ -471,6 +629,43 @@ test("Act durably creates one Planning Run before acknowledging it", () =>
       reviewRound: null,
       outcome: null,
       createdAt: "2026-08-13T00:00:00.000Z",
+      planRevision: 1,
+      plan: null,
+      confirmedPlan: null,
+      lastCommittedTransition: "SubmitObjective",
+      planningExecution: {
+        id: "execution:planning-test-1",
+        status: "Pending",
+        replacementUsed: false,
+        directive: {
+          format: "openab.execution-directive/v1",
+          capability: "directive:planning-test-1",
+          executionId: "execution:planning-test-1",
+          runId: "run:test-1",
+          planRevision: 1,
+          agentRoleIdentity: ORCHESTRATOR_ID,
+          executionProfile: PLANNING_PROFILE,
+          executionContext: {
+            format: "openab.execution-context/v1",
+            runId: "run:test-1",
+            objective: "Build a durable first Run",
+            planRevision: 1,
+            priorPlan: null,
+            revisionGuidance: null,
+          },
+          effectIntent: {
+            id: "effect-intent:test-1",
+            kind: "StartPlanningExecution",
+          },
+          authorityEpoch: 1,
+          deliveryGeneration: 1,
+          safetyLimit: {
+            durationMs: 600_000,
+            startedAt: "2026-08-13T00:00:00.000Z",
+            expiresAt: "2026-08-13T00:10:00.000Z",
+          },
+        },
+      },
     };
     assert.deepEqual(reply, {
       status: "accepted",
@@ -481,12 +676,32 @@ test("Act durably creates one Planning Run before acknowledging it", () =>
         authorityEpoch: 1,
         run,
         latestReceipt: receipt,
+        stage: "Planning",
+        condition: "Active",
+        currentActor: "Orchestrator Agent",
+        nextActor: "Operator",
+        lastCommittedTransition: "SubmitObjective",
+        planRevision: 1,
+        legalActions: ["AbandonRun", "CancelRun"],
         copy: {
           status: "Run is active in Planning",
           nextAction: "Await the Orchestrator Agent's Run Plan",
         },
       },
-      offers: [],
+      offers: [
+        {
+          kind: "AbandonRun",
+          offer: "offer:planning-action-1",
+          constraints: {
+            reason: { type: "string", minLength: 1, maxLength: 4096 },
+          },
+        },
+        {
+          kind: "CancelRun",
+          offer: "offer:planning-action-2",
+          constraints: {},
+        },
+      ],
     });
 
     const restarted = reopen();
@@ -500,9 +715,605 @@ test("Act durably creates one Planning Run before acknowledging it", () =>
         status: "observed",
         cursor: reply.cursor,
         view: reply.view,
-        offers: [],
+        offers: reply.offers,
       },
     );
+  }));
+
+test("execution Pull exposes the immutable bounded Planning directive", () =>
+  withPlanningRuntimeCore(async ({ core, reopen }) => {
+    const observed = await core.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:start-planning",
+      offer: observed.offers[0].offer,
+      action: {
+        kind: "SubmitObjective",
+        payload: { objective: "Prepare an execution-ready plan" },
+      },
+    });
+
+    const pull = {
+      kind: "Pull",
+      agentRoleIdentity: ORCHESTRATOR_ID,
+    };
+    const offered = await core.execution(pull);
+    assert.deepEqual(offered, {
+      status: "offered",
+      directive: {
+        format: "openab.execution-directive/v1",
+        capability: "directive:planning-test-1",
+        executionId: "execution:planning-test-1",
+        runId: "run:test-1",
+        planRevision: 1,
+        agentRoleIdentity: ORCHESTRATOR_ID,
+        executionProfile: PLANNING_PROFILE,
+        executionContext: {
+          format: "openab.execution-context/v1",
+          runId: "run:test-1",
+          objective: "Prepare an execution-ready plan",
+          planRevision: 1,
+          priorPlan: null,
+          revisionGuidance: null,
+        },
+        effectIntent: {
+          id: "effect-intent:test-1",
+          kind: "StartPlanningExecution",
+        },
+        authorityEpoch: 1,
+        deliveryGeneration: 1,
+        safetyLimit: {
+          durationMs: 600_000,
+          startedAt: "2026-08-13T00:00:00.000Z",
+          expiresAt: "2026-08-13T00:10:00.000Z",
+        },
+      },
+    });
+
+    offered.directive.executionContext.objective = "mutated by caller";
+    assert.equal(
+      (await core.execution(pull)).directive.executionContext.objective,
+      "Prepare an execution-ready plan",
+    );
+    assert.deepEqual(await reopen().execution(pull), {
+      status: "offered",
+      directive: {
+        ...offered.directive,
+        executionContext: {
+          ...offered.directive.executionContext,
+          objective: "Prepare an execution-ready plan",
+        },
+      },
+    });
+  }));
+
+test("a validated Planning Report establishes Completion and durable Operator offers", () =>
+  withPlanningRuntimeCore(async ({ core, reopen }) => {
+    const initial = await core.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:start-planning",
+      offer: initial.offers[0].offer,
+      action: {
+        kind: "SubmitObjective",
+        payload: { objective: "Prepare an execution-ready plan" },
+      },
+    });
+    const pulled = await core.execution({
+      kind: "Pull",
+      agentRoleIdentity: ORCHESTRATOR_ID,
+    });
+    const result = validPlanningResult();
+
+    const reported = await core.execution({
+      kind: "Report",
+      agentRoleIdentity: ORCHESTRATOR_ID,
+      factId: "fact:planning-result-1",
+      directive: pulled.directive.capability,
+      result,
+      evidence: planningEvidence(result),
+    });
+
+    assert.deepEqual(reported, {
+      status: "accepted",
+      receipt: {
+        status: "accepted",
+        requestId: "fact:planning-result-1",
+        commitId: "commit:test-2",
+        revision: 2,
+        actionKind: "ReportPlanningResult",
+        runId: "run:test-1",
+        acceptedAt: "2026-08-13T00:00:00.000Z",
+      },
+    });
+    const observation = await core.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    assert.equal(observation.view.run.stage, "Planning");
+    assert.equal(observation.view.run.condition, "Waiting for Operator");
+    assert.equal(observation.view.run.planRevision, 1);
+    assert.deepEqual(observation.view.run.plan, result.runPlan);
+    assert.equal(observation.view.run.planningExecution.status, "Completed");
+    assert.equal(
+      observation.view.run.lastCommittedTransition,
+      "ReportPlanningResult",
+    );
+    assert.deepEqual(
+      observation.offers.map(({ kind }) => kind),
+      ["AbandonRun", "CancelRun", "ConfirmPlan", "RevisePlan"],
+    );
+
+    const restarted = reopen();
+    const replayed = await restarted.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    assert.deepEqual(replayed, observation);
+    assert.deepEqual(
+      await restarted.execution({
+        kind: "Pull",
+        agentRoleIdentity: ORCHESTRATOR_ID,
+      }),
+      { status: "idle" },
+    );
+  }));
+
+test("both locales expose the same Planning authority and legal actions", () =>
+  withPlanningRuntimeCore(async ({ core }) => {
+    const en = await completePlanningExecution(core);
+    const zhTw = await core.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "zh-TW",
+    });
+    const expectedAuthority = {
+      stage: "Planning",
+      condition: "Waiting for Operator",
+      currentActor: "Operator",
+      nextActor: null,
+      lastCommittedTransition: "ReportPlanningResult",
+      planRevision: 1,
+      legalActions: ["AbandonRun", "CancelRun", "ConfirmPlan", "RevisePlan"],
+    };
+
+    for (const [field, value] of Object.entries(expectedAuthority)) {
+      assert.deepEqual(en.view[field], value);
+      assert.deepEqual(zhTw.view[field], value);
+    }
+    assert.deepEqual(zhTw.offers, en.offers);
+    assert.deepEqual(en.view.copy, {
+      status: "Run Plan awaits Operator confirmation",
+      nextAction: "Confirm, revise, abandon, or cancel the Run",
+    });
+    assert.deepEqual(zhTw.view.copy, {
+      status: "Run Plan 等待 Operator 確認",
+      nextAction: "確認、修訂、放棄或取消 Run",
+    });
+  }));
+
+test("a scripted Report remains an observation until result and evidence validate", () =>
+  withPlanningRuntimeCore(async ({ core, reopen }) => {
+    const initial = await core.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    const started = await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:start-planning",
+      offer: initial.offers[0].offer,
+      action: {
+        kind: "SubmitObjective",
+        payload: { objective: "Prepare an execution-ready plan" },
+      },
+    });
+    const pulled = await core.execution({
+      kind: "Pull",
+      agentRoleIdentity: ORCHESTRATOR_ID,
+    });
+    const result = validPlanningResult();
+    const invalidRequest = {
+      kind: "Report",
+      agentRoleIdentity: ORCHESTRATOR_ID,
+      factId: "fact:invalid-planning-result",
+      directive: pulled.directive.capability,
+      result,
+      evidence: [
+        {
+          format: "openab.verification-evidence/v1",
+          kind: "ScriptedPlanningResult",
+          resultDigest: `sha256:${"0".repeat(64)}`,
+        },
+      ],
+    };
+    const invalid = await core.execution(invalidRequest);
+
+    assert.equal(invalid.status, "rejected");
+    assert.equal(invalid.rejection.code, "InvalidVerificationEvidence");
+    assert.equal(invalid.receipt.status, "rejected");
+    assert.equal(invalid.receipt.requestId, "fact:invalid-planning-result");
+    const observed = await core.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    assert.deepEqual(observed.cursor, started.cursor);
+    assert.equal(observed.view.run.condition, "Active");
+    assert.equal(observed.view.run.planningExecution.status, "Pending");
+
+    const duplicate = await reopen().execution(invalidRequest);
+    assert.equal(duplicate.status, "duplicate");
+    assert.deepEqual(duplicate.receipt, invalid.receipt);
+  }));
+
+test("Planning expiry never establishes Execution Completion", () => {
+  let now = "2026-08-13T00:00:00.000Z";
+  return withPlanningRuntimeCore(
+    async ({ core }) => {
+      const initial = await core.operator({
+        kind: "Observe",
+        principal: OPERATOR_ID,
+        locale: "en",
+      });
+      const started = await core.operator({
+        kind: "Act",
+        principal: OPERATOR_ID,
+        locale: "en",
+        requestId: "request:start-planning",
+        offer: initial.offers[0].offer,
+        action: {
+          kind: "SubmitObjective",
+          payload: { objective: "Prepare an execution-ready plan" },
+        },
+      });
+      const directive = (
+        await core.execution({
+          kind: "Pull",
+          agentRoleIdentity: ORCHESTRATOR_ID,
+        })
+      ).directive;
+      now = "2026-08-13T00:10:00.000Z";
+
+      assert.deepEqual(
+        await core.execution({
+          kind: "Pull",
+          agentRoleIdentity: ORCHESTRATOR_ID,
+        }),
+        {
+          status: "expired",
+          executionId: "execution:planning-test-1",
+          completionEstablished: false,
+        },
+      );
+      const result = validPlanningResult();
+      const late = await core.execution({
+        kind: "Report",
+        agentRoleIdentity: ORCHESTRATOR_ID,
+        factId: "fact:late-planning-result",
+        directive: directive.capability,
+        result,
+        evidence: planningEvidence(result),
+      });
+      assert.equal(late.status, "rejected");
+      assert.equal(late.rejection.code, "SafetyLimitExpired");
+
+      const observed = await core.operator({
+        kind: "Observe",
+        principal: OPERATOR_ID,
+        locale: "en",
+      });
+      assert.deepEqual(observed.cursor, started.cursor);
+      assert.equal(observed.view.run.planningExecution.status, "Pending");
+    },
+    { clock: () => now },
+  );
+});
+
+test("RevisePlan creates the next Planning Execution without using a replacement", () =>
+  withPlanningRuntimeCore(async ({ core, reopen }) => {
+    const firstResult = validPlanningResult();
+    const waiting = await completePlanningExecution(core, firstResult);
+    const revise = waiting.offers.find(({ kind }) => kind === "RevisePlan");
+
+    const revised = await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:revise-plan-1",
+      offer: revise.offer,
+      action: {
+        kind: "RevisePlan",
+        payload: { guidance: "Limit scope to the public Runtime Core seam" },
+      },
+    });
+
+    assert.equal(revised.status, "accepted");
+    assert.deepEqual(revised.cursor, {
+      revision: 3,
+      commitId: "commit:test-3",
+    });
+    assert.equal(revised.view.run.id, "run:test-1");
+    assert.equal(revised.view.run.condition, "Active");
+    assert.equal(revised.view.run.planRevision, 2);
+    assert.equal(revised.view.run.planningExecution.id, "execution:planning-test-2");
+    assert.equal(revised.view.run.planningExecution.replacementUsed, false);
+    assert.equal(
+      revised.view.run.lastCommittedTransition,
+      "RevisePlan",
+    );
+
+    const next = await core.execution({
+      kind: "Pull",
+      agentRoleIdentity: ORCHESTRATOR_ID,
+    });
+    assert.equal(next.status, "offered");
+    assert.equal(next.directive.planRevision, 2);
+    assert.deepEqual(next.directive.executionContext.priorPlan, firstResult.runPlan);
+    assert.equal(
+      next.directive.executionContext.revisionGuidance,
+      "Limit scope to the public Runtime Core seam",
+    );
+    assert.equal(next.directive.effectIntent.id, "effect-intent:test-2");
+    assert.equal(next.directive.capability, "directive:planning-test-2");
+
+    const restarted = reopen();
+    assert.deepEqual(
+      await restarted.execution({
+        kind: "Pull",
+        agentRoleIdentity: ORCHESTRATOR_ID,
+      }),
+      next,
+    );
+    const secondResult = validPlanningResult({
+      executionId: "execution:planning-test-2",
+      planRevision: 2,
+      objective: "Prepare a plan limited to the public Runtime Core seam",
+    });
+    const secondReport = await restarted.execution({
+      kind: "Report",
+      agentRoleIdentity: ORCHESTRATOR_ID,
+      factId: "fact:planning-result-2",
+      directive: next.directive.capability,
+      result: secondResult,
+      evidence: planningEvidence(secondResult),
+    });
+    assert.equal(secondReport.status, "accepted");
+    const secondWaiting = await restarted.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    assert.equal(secondWaiting.view.run.condition, "Waiting for Operator");
+    assert.equal(secondWaiting.view.run.planRevision, 2);
+    assert.deepEqual(secondWaiting.view.run.plan, secondResult.runPlan);
+  }));
+
+test("ConfirmPlan freezes the complete execution authority boundary", () =>
+  withPlanningRuntimeCore(async ({ core, reopen }) => {
+    const result = validPlanningResult();
+    const waiting = await completePlanningExecution(core, result);
+    const confirm = waiting.offers.find(({ kind }) => kind === "ConfirmPlan");
+
+    const confirmed = await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:confirm-plan-1",
+      offer: confirm.offer,
+      action: { kind: "ConfirmPlan", payload: {} },
+    });
+
+    assert.equal(confirmed.status, "accepted");
+    assert.deepEqual(confirmed.cursor, {
+      revision: 3,
+      commitId: "commit:test-3",
+    });
+    assert.equal(confirmed.view.run.stage, "Coding");
+    assert.equal(confirmed.view.run.condition, "Active");
+    assert.deepEqual(confirmed.view.run.confirmedPlan, {
+      format: "openab.run-plan/v1",
+      planRevision: 1,
+      confirmedAt: "2026-08-13T00:00:00.000Z",
+      ...result.runPlan,
+    });
+    assert.deepEqual(confirmed.offers, []);
+
+    confirmed.view.run.confirmedPlan.scope.push("caller mutation");
+    const restarted = reopen();
+    const observed = await restarted.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    assert.deepEqual(observed.view.run.confirmedPlan, {
+      format: "openab.run-plan/v1",
+      planRevision: 1,
+      confirmedAt: "2026-08-13T00:00:00.000Z",
+      ...result.runPlan,
+    });
+  }));
+
+test("restart verifies earlier Run revisions after later planning commits", () =>
+  withPlanningRuntimeCore(async ({ core, close, options, primaryRoot }) => {
+    const waiting = await completePlanningExecution(core);
+    const confirm = waiting.offers.find(({ kind }) => kind === "ConfirmPlan");
+    await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:confirm-plan-1",
+      offer: confirm.offer,
+      action: { kind: "ConfirmPlan", payload: {} },
+    });
+    close();
+
+    const database = new DatabaseSync(join(primaryRoot, "runtime-core.sqlite3"));
+    database
+      .prepare("UPDATE runs SET objective = ? WHERE run_id = ?")
+      .run("tampered earlier objective", "run:test-1");
+    database.close();
+
+    assert.throws(
+      () => openRuntimeCore(options),
+      /authoritative created Run differs from its capsule/,
+    );
+  }));
+
+test("a material plan change after confirmation requires a Successor Run", () =>
+  withPlanningRuntimeCore(async ({ core, reopen }) => {
+    const waiting = await completePlanningExecution(core);
+    const confirm = waiting.offers.find(({ kind }) => kind === "ConfirmPlan");
+    const revise = waiting.offers.find(({ kind }) => kind === "RevisePlan");
+    const confirmed = await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:confirm-plan-1",
+      offer: confirm.offer,
+      action: { kind: "ConfirmPlan", payload: {} },
+    });
+
+    const rejected = await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:change-confirmed-plan",
+      offer: revise.offer,
+      action: {
+        kind: "RevisePlan",
+        payload: { guidance: "Broaden the objective and acceptance boundary" },
+      },
+    });
+
+    assert.equal(rejected.status, "rejected");
+    assert.equal(rejected.rejection.code, "SuccessorRunRequired");
+    assert.deepEqual(rejected.cursor, confirmed.cursor);
+    assert.equal(rejected.view.run.lastCommittedTransition, "ConfirmPlan");
+
+    const restarted = reopen();
+    const duplicate = await restarted.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "zh-TW",
+      requestId: "request:change-confirmed-plan",
+      offer: revise.offer,
+      action: {
+        kind: "RevisePlan",
+        payload: { guidance: "Broaden the objective and acceptance boundary" },
+      },
+    });
+    assert.equal(duplicate.status, "duplicate");
+    assert.deepEqual(duplicate.receipt, rejected.receipt);
+  }));
+
+test("AbandonRun with no active Execution durably commits Abandoned", () =>
+  withPlanningRuntimeCore(async ({ core, reopen }) => {
+    const waiting = await completePlanningExecution(core);
+    const abandon = waiting.offers.find(({ kind }) => kind === "AbandonRun");
+
+    const abandoned = await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:abandon-run-1",
+      offer: abandon.offer,
+      action: {
+        kind: "AbandonRun",
+        payload: { reason: "The plan is no longer worth pursuing" },
+      },
+    });
+
+    assert.equal(abandoned.status, "accepted");
+    assert.equal(abandoned.view.run.condition, "Terminal");
+    assert.equal(abandoned.view.run.outcome, "Abandoned");
+    assert.equal(abandoned.view.run.lastCommittedTransition, "AbandonRun");
+    assert.deepEqual(abandoned.offers, []);
+
+    const restarted = reopen();
+    const observed = await restarted.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    assert.equal(observed.view.run.outcome, "Abandoned");
+    assert.deepEqual(observed.cursor, abandoned.cursor);
+  }));
+
+test("AbandonRun with active Planning work enters cancellation convergence", () =>
+  withPlanningRuntimeCore(async ({ core, reopen }) => {
+    const initial = await core.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    const active = await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:start-planning",
+      offer: initial.offers[0].offer,
+      action: {
+        kind: "SubmitObjective",
+        payload: { objective: "Prepare an execution-ready plan" },
+      },
+    });
+    assert.deepEqual(
+      active.offers.map(({ kind }) => kind),
+      ["AbandonRun", "CancelRun"],
+    );
+    const abandon = active.offers.find(({ kind }) => kind === "AbandonRun");
+
+    const cancelling = await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:abandon-active-run",
+      offer: abandon.offer,
+      action: {
+        kind: "AbandonRun",
+        payload: { reason: "Stop after active work is contained" },
+      },
+    });
+
+    assert.equal(cancelling.status, "accepted");
+    assert.equal(cancelling.view.run.condition, "Cancelling");
+    assert.equal(cancelling.view.run.outcome, null);
+    assert.equal(cancelling.view.run.abandonAfterCancellation, true);
+    assert.equal(cancelling.view.run.planningExecution.status, "Pending");
+    assert.deepEqual(cancelling.offers, []);
+    assert.deepEqual(
+      await core.execution({
+        kind: "Pull",
+        agentRoleIdentity: ORCHESTRATOR_ID,
+      }),
+      { status: "withheld", reason: "CancellationInProgress" },
+    );
+
+    const restarted = reopen();
+    const observed = await restarted.operator({
+      kind: "Observe",
+      principal: OPERATOR_ID,
+      locale: "en",
+    });
+    assert.equal(observed.view.run.condition, "Cancelling");
+    assert.equal(observed.view.run.outcome, null);
   }));
 
 test("primary loss requires an explicit Restore from a disclosed recovery point", () =>
@@ -1531,7 +2342,7 @@ test("exact replay returns the original receipt without another transition", () 
       status: "Run 正在 Planning 階段進行",
       nextAction: "等待 Orchestrator Agent 提出 Run Plan",
     });
-    assert.deepEqual(duplicate.offers, []);
+    assert.deepEqual(duplicate.offers, accepted.offers);
   }));
 
 test("conflicting request IDs and stale or mismatched offers do not commit", () =>
@@ -1606,7 +2417,7 @@ test("conflicting request IDs and stale or mismatched offers do not commit", () 
     });
     assert.deepEqual(finalView.cursor, accepted.cursor);
     assert.deepEqual(finalView.view.run, accepted.view.run);
-    assert.deepEqual(finalView.offers, []);
+    assert.deepEqual(finalView.offers, accepted.offers);
 
     const restarted = reopen();
     const replayedConflict = await restarted.operator(conflictingRequest);
@@ -1665,7 +2476,7 @@ test("restart completes the one recovery-first capsule that SQLite has not commi
     assert.deepEqual(recovered.cursor, accepted.cursor);
     assert.deepEqual(recovered.view.run, accepted.view.run);
     assert.deepEqual(recovered.view.latestReceipt, accepted.receipt);
-    assert.deepEqual(recovered.offers, []);
+    assert.deepEqual(recovered.offers, accepted.offers);
   } finally {
     core?.close();
     rmSync(root, { recursive: true, force: true });
