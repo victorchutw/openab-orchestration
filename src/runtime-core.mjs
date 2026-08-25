@@ -8,10 +8,13 @@ import {
   authorizeOperatorRequest,
   createInitialOffer,
   createRejectionReceipt,
+  executionRequestDigest,
   operatorRequestContent,
   operatorRequestDigest,
   projectOperatorReply,
+  proposePlanningReport,
   proposeOperatorAction,
+  validatePlanningReport,
 } from "./core-model.mjs";
 import { openDurability } from "./durability.mjs";
 
@@ -22,8 +25,22 @@ function runtimeNormalizeOptions(options) {
     "operatorIdentity",
     "configurationRevision",
     "effectiveConfigurationDigest",
+    "orchestratorIdentity",
   ]) {
     requireNonEmptyString(options?.[field], field);
+  }
+  if (
+    options.planningExecutionProfile === null ||
+    typeof options.planningExecutionProfile !== "object" ||
+    Array.isArray(options.planningExecutionProfile)
+  ) {
+    throw new TypeError("planningExecutionProfile must be an object");
+  }
+  for (const field of ["id", "servingProvider", "model", "runtime"]) {
+    requireNonEmptyString(
+      options.planningExecutionProfile[field],
+      `planningExecutionProfile.${field}`,
+    );
   }
   if (
     options.secretReferenceGenerations === null ||
@@ -48,6 +65,15 @@ function runtimeNormalizeOptions(options) {
     effectIntent:
       options.identifiers?.effectIntent ??
       (() => `effect-intent:${runtimeRandomUUID()}`),
+    execution:
+      options.identifiers?.execution ??
+      (() => `execution:${runtimeRandomUUID()}`),
+    directive:
+      options.identifiers?.directive ??
+      (() => `directive:${runtimeRandomBytes(32).toString("base64url")}`),
+    operatorOffer:
+      options.identifiers?.operatorOffer ??
+      (() => `offer:${runtimeRandomBytes(32).toString("base64url")}`),
   };
   for (const [kind, generator] of Object.entries(identifiers)) {
     if (typeof generator !== "function") {
@@ -101,6 +127,39 @@ function runtimeDurablyReject(
     rejection,
     durableReceipt,
   );
+}
+
+function runtimeDurablyRejectExecution(
+  durability,
+  options,
+  request,
+  requestDigest,
+  rejection,
+  conflictWithDigest,
+) {
+  const receipt = {
+    status: "rejected",
+    requestId: request.factId,
+    actionKind: "ReportPlanningResult",
+    cursor: structuredClone(durability.inspect().cursor),
+    rejection: structuredClone(rejection),
+    rejectedAt: options.clock(),
+  };
+  const durableReceipt = durability.reject({
+    requestId: request.factId,
+    requestDigest,
+    requestContent: {
+      kind: request.kind,
+      agentRoleIdentity: request.agentRoleIdentity,
+      factId: request.factId,
+      directive: request.directive,
+      result: structuredClone(request.result),
+      evidence: structuredClone(request.evidence),
+    },
+    conflictWithDigest,
+    receipt,
+  });
+  return { status: "rejected", rejection, receipt: durableReceipt };
 }
 
 function runtimeRecoveryReply(state, request, recoveryOffer, result) {
@@ -323,12 +382,44 @@ export function openRuntimeCore(rawOptions) {
           );
         }
 
-        const proposed = proposeOperatorAction(transaction.inspect(), request, {
+        const generated = {
           acceptedAt: options.clock(),
-          runId: options.identifiers.run(),
-          commitId: options.identifiers.commit(),
-          effectIntentId: options.identifiers.effectIntent(),
-        });
+        };
+        if (request.action.kind === "SubmitObjective") {
+          generated.runId = options.identifiers.run();
+        }
+        generated.commitId = options.identifiers.commit();
+        if (
+          request.action.kind === "SubmitObjective" ||
+          request.action.kind === "RevisePlan" ||
+          request.action.kind === "AbandonRun" ||
+          request.action.kind === "CancelRun"
+        ) {
+          generated.effectIntentId = options.identifiers.effectIntent();
+        }
+        if (
+          request.action.kind === "SubmitObjective" ||
+          request.action.kind === "RevisePlan"
+        ) {
+          Object.assign(generated, {
+            executionId: options.identifiers.execution(),
+            directiveCapability: options.identifiers.directive(),
+            orchestratorIdentity: options.orchestratorIdentity,
+            planningExecutionProfile: options.planningExecutionProfile,
+          });
+        }
+        if (request.action.kind === "SubmitObjective") {
+          generated.operatorIdentity = options.operatorIdentity;
+          generated.activeOperatorOffers = Array.from(
+            { length: 2 },
+            () => options.identifiers.operatorOffer(),
+          );
+        }
+        const proposed = proposeOperatorAction(
+          transaction.inspect(),
+          request,
+          generated,
+        );
         if (proposed.rejection !== undefined) {
           return runtimeDurablyReject(
             transaction,
@@ -345,6 +436,109 @@ export function openRuntimeCore(rawOptions) {
           request.locale,
           { status: "accepted", receipt },
         );
+      });
+    },
+
+    async execution(request) {
+      if (request?.kind === "Pull") {
+        if (
+          request === null ||
+          typeof request !== "object" ||
+          Array.isArray(request) ||
+          Object.keys(request).some(
+            (key) => !["kind", "agentRoleIdentity"].includes(key),
+          )
+        ) {
+          throw new TypeError("execution Pull contains unsupported fields");
+        }
+        requireNonEmptyString(
+          request.agentRoleIdentity,
+          "agentRoleIdentity",
+        );
+        if (request.agentRoleIdentity !== options.orchestratorIdentity) {
+          throw new Error(
+            "agentRoleIdentity is not the configured Orchestrator Agent",
+          );
+        }
+        if (durability.kind === "RecoveryRequired") {
+          return { status: "unavailable", reason: "RecoveryRequired" };
+        }
+        const execution = durability.inspect().run?.planningExecution;
+        const run = durability.inspect().run;
+        if (run?.condition === "Cancelling") {
+          return { status: "withheld", reason: "CancellationInProgress" };
+        }
+        if (execution?.status !== "Pending") {
+          return { status: "idle" };
+        }
+        if (
+          Date.parse(options.clock()) >=
+          Date.parse(execution.directive.safetyLimit.expiresAt)
+        ) {
+          return {
+            status: "expired",
+            executionId: execution.id,
+            completionEstablished: false,
+          };
+        }
+        return {
+          status: "offered",
+          directive: structuredClone(execution.directive),
+        };
+      }
+      if (request?.kind !== "Report") {
+        throw new TypeError("execution request kind must be Pull or Report");
+      }
+      if (durability.kind === "RecoveryRequired") {
+        return { status: "unavailable", reason: "RecoveryRequired" };
+      }
+      const observedAt = options.clock();
+      return durability.act((transaction) => {
+        const requestDigest = executionRequestDigest(request);
+        const prior = transaction.receipt(request.factId, requestDigest);
+        if (prior?.conflictWithDigest !== undefined) {
+          const rejection = {
+              code: "RequestIdConflict",
+              message: "factId was already used with different content",
+          };
+          return runtimeDurablyRejectExecution(
+            transaction,
+            options,
+            request,
+            requestDigest,
+            rejection,
+            prior.conflictWithDigest,
+          );
+        }
+        if (prior !== null) {
+          return { status: "duplicate", receipt: prior.receipt };
+        }
+        const state = transaction.inspect();
+        const rejection = validatePlanningReport(
+          request,
+          state,
+          observedAt,
+        );
+        if (rejection !== null) {
+          return runtimeDurablyRejectExecution(
+            transaction,
+            options,
+            request,
+            requestDigest,
+            rejection,
+          );
+        }
+        const proposed = proposePlanningReport(state, request, {
+          acceptedAt: observedAt,
+          commitId: options.identifiers.commit(),
+          operatorIdentity: options.operatorIdentity,
+          operatorOffers: Array.from(
+            { length: 4 },
+            () => options.identifiers.operatorOffer(),
+          ),
+        });
+        const receipt = transaction.commit(proposed.candidate);
+        return { status: "accepted", receipt };
       });
     },
 

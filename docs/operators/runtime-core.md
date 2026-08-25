@@ -1,4 +1,4 @@
-# Runtime Core Operator objective
+# Runtime Core planning contract
 
 The first Runtime Core transition accepts one objective from the authenticated
 Operator and creates one non-terminal Run. Callers use the same transport-neutral
@@ -9,6 +9,8 @@ const core = openRuntimeCore({
   primaryRoot,
   recoveryRoot,
   operatorIdentity,
+  orchestratorIdentity,
+  planningExecutionProfile,
   configurationRevision,
   effectiveConfigurationDigest,
   secretReferenceGenerations,
@@ -60,8 +62,10 @@ receipts retain their canonical English identifiers and identical semantics.
 
 `SubmitObjective` accepts an objective from 1 through 4096 characters. A valid
 Act creates one Run with Stage `Planning` and Condition `Active`, consumes the
-offer, creates the pending Planning Effect Intent, and returns an accepted
-receipt.
+offer, creates the pending Planning Effect Intent and immutable Planning
+Execution, and returns an accepted receipt. While that Execution is pending,
+the Operator may request `AbandonRun` or `CancelRun`; either request enters
+`Cancelling` until active or uncertain work is proven stopped or isolated.
 
 The Runtime Core writes and verifies an immutable recovery commit capsule
 before applying that exact Commit ID in one authoritative SQLite transaction.
@@ -161,6 +165,98 @@ action is to reconcile those effects. Reopening the Runtime Core preserves the
 gate, cursor, Run, original receipts, audit history, and one authoritative
 head. Earlier-epoch effect participation is recorded as late-evidence-only
 when a later restore supersedes its gate.
+
+## Planning Execution Pull and Report
+
+The scripted planning adapter uses the same transport-neutral Execution seam
+that a later qualified worker will use:
+
+```js
+const offered = await core.execution({
+  kind: "Pull",
+  agentRoleIdentity: orchestratorIdentity,
+});
+
+const report = await core.execution({
+  kind: "Report",
+  agentRoleIdentity: orchestratorIdentity,
+  factId,
+  directive: offered.directive.capability,
+  result,
+  evidence,
+});
+```
+
+`Pull` returns an `openab.execution-directive/v1` value bound to one Execution
+ID, Run and plan revision, Orchestrator Agent Role Identity, immutable Execution
+Profile, `openab.execution-context/v1` value, authority epoch, delivery
+generation, and `StartPlanningExecution` Effect Intent. The context contains
+the objective and, for a revision, the prior plan and Operator guidance. The
+directive carries a 600,000 millisecond safety limit. At or after its deadline,
+Pull reports expiry and a Report cannot establish Execution Completion.
+
+A successful result has this shape:
+
+```js
+{
+  format: "openab.planning-execution-result/v1",
+  executionId,
+  planRevision,
+  agentRoleIdentity: orchestratorIdentity,
+  executionProfileId: planningExecutionProfile.id,
+  outcome: "Succeeded",
+  runPlan: {
+    objective,
+    scope: ["..."],
+    acceptanceBoundary: ["..."],
+    evidenceRequirements: ["..."],
+    remediationAllowance: { maximumRounds: 1 },
+    eligibleExecutionProfiles: {
+      coding: ["profile:..."],
+      reviewerA: ["profile:..."],
+      reviewerB: ["profile:..."]
+    },
+    fallbackOrder: {
+      coding: ["profile:..."],
+      reviewerA: ["profile:..."],
+      reviewerB: ["profile:..."]
+    },
+    reviewerDiversityMode: "distinct-serving-providers"
+  }
+}
+```
+
+Every eligible profile must appear exactly once in that role's deterministic
+fallback order. Evidence uses `openab.verification-evidence/v1`, kind
+`ScriptedPlanningResult`, and a `resultDigest` equal to the canonical digest of
+the complete result. A Report is only an observation: wrong directive,
+identity, profile, revision, result format, evidence, or timing is rejected
+without Completion or a cursor change. A valid Report reaches the recovery-first
+commit boundary before the Run moves to `Planning / Waiting for Operator`.
+
+## Operator Run Plan actions
+
+After a valid Planning result, Observe offers `ConfirmPlan`, `RevisePlan`,
+`AbandonRun`, and `CancelRun` as opaque cursor-bound capabilities.
+
+- `RevisePlan` accepts bounded textual guidance. It creates the next plan
+  revision and a fresh initial Orchestrator Execution, directive, context, and
+  Effect Intent in the same Run. It does not consume a failure replacement.
+- `ConfirmPlan` freezes the objective, scope, acceptance boundary, evidence
+  requirements, one-round remediation allowance, eligible profiles, fallback
+  order, and distinct-Serving-Provider reviewer policy. The Run then enters
+  `Coding / Active`; this planning implementation does not dispatch Coding.
+- `AbandonRun` with no active work commits terminal `Abandoned`. With active
+  Planning work it enters `Cancelling` and records that Abandonment follows
+  convergence. `CancelRun` follows the same convergence rule and can commit
+  terminal `Cancelled` when no work remains active or uncertain.
+- A `RevisePlan` request that refers to a plan already confirmed receives
+  `SuccessorRunRequired`; it cannot mutate the confirmed Run.
+
+Each Run view exposes canonical Stage, Condition, current and next actor, last
+committed transition, plan revision, and legal action kinds. `en` and `zh-TW`
+select presentation copy only; capabilities, constraints, results, receipts,
+cursors, and transitions are identical.
 
 ## Replay and rejection
 

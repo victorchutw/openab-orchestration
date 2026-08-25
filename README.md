@@ -6,8 +6,8 @@ OpenAB project.
 
 The planning destination is complete and greenfield implementation has begun.
 The product provides a buildable, versioned entry point, a fail-closed
-Installation preflight, and the first durable Runtime Core Operator transition.
-The complete MVP remains one coding and review loop:
+Installation preflight, and a durable Runtime Core planning loop through Run
+Plan confirmation. The complete MVP remains one coding and review loop:
 
 ```text
 Operator
@@ -41,11 +41,13 @@ source control, not the operational source of truth.
 ## Status
 
 - Runtime Core currently supports observing, durably creating, restarting,
-  exactly replaying, and explicitly restoring the first Planning / Active Run
-  under a new authority epoch. Restore activates only a fully verified
-  generation-plus-capsule candidate and gates uncertain effects for
-  Reconciliation. Later lifecycle transitions and adapters are not yet
-  implemented, and no production deployment is supported.
+  exactly replaying, and explicitly restoring a Run under a new authority
+  epoch. A scripted Orchestrator Execution can propose a versioned Run Plan for
+  Operator revision, confirmation, abandonment, or cancellation. Restore
+  activates only a fully verified generation-plus-capsule candidate and gates
+  uncertain effects for Reconciliation. Real OpenAB execution and later coding
+  and review transitions are not yet implemented, and no production deployment
+  is supported.
 - One Orchestrator Agent, one Coding Agent, and two decision-isolated Reviewer
   Agents are in the MVP destination.
 - One bounded remediation round is allowed before returning to the Operator.
@@ -84,7 +86,7 @@ Configuration.
 - [Issue tracker operations](./docs/agents/issue-tracker.md)
 - [Configuration Contract](./config/configuration-contract.schema.json)
 - [Synthetic Installation](./config/examples/synthetic-installation.json)
-- [Runtime Core Operator objective](./docs/operators/runtime-core.md)
+- [Runtime Core planning contract](./docs/operators/runtime-core.md)
 - [License scope](./LICENSE_SCOPE.md)
 - [Contribution guide](./CONTRIBUTING.md)
 - [Security policy](./SECURITY.md)
