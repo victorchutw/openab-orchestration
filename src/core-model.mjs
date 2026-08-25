@@ -7,6 +7,7 @@ export const CONFIRM_PLAN = "ConfirmPlan";
 export const REVISE_PLAN = "RevisePlan";
 export const ABANDON_RUN = "AbandonRun";
 export const CANCEL_RUN = "CancelRun";
+export const REQUEST_PLAN_CHANGE = "RequestPlanChange";
 export const SUBMIT_OBJECTIVE_CONSTRAINTS = Object.freeze({
   objective: Object.freeze({
     type: "string",
@@ -61,6 +62,15 @@ const PLANNING_OPERATOR_ACTIONS = Object.freeze({
   [CONFIRM_PLAN]: Object.freeze({}),
   [REVISE_PLAN]: Object.freeze({
     guidance: Object.freeze({ type: "string", minLength: 1, maxLength: 4096 }),
+  }),
+});
+const REQUEST_PLAN_CHANGE_CONSTRAINTS = Object.freeze({
+  objective: Object.freeze({ type: "string", minLength: 1, maxLength: 4096 }),
+  scope: Object.freeze({ type: "array", minItems: 1, items: "string" }),
+  acceptanceBoundary: Object.freeze({
+    type: "array",
+    minItems: 1,
+    items: "string",
   }),
 });
 
@@ -164,6 +174,27 @@ function coreValidateAct(request) {
     }
     return;
   }
+  if (request.action.kind === REQUEST_PLAN_CHANGE) {
+    coreRequireOnlyKeys(
+      request.action.payload,
+      ["objective", "scope", "acceptanceBoundary"],
+      "action.payload",
+    );
+    const objective = request.action.payload.objective;
+    if (
+      typeof objective !== "string" ||
+      objective.length < 1 ||
+      objective.length > 4096
+    ) {
+      throw new TypeError("objective must contain between 1 and 4096 characters");
+    }
+    coreRequireNonEmptyStringArray(request.action.payload.scope, "scope");
+    coreRequireNonEmptyStringArray(
+      request.action.payload.acceptanceBoundary,
+      "acceptanceBoundary",
+    );
+    return;
+  }
   throw new TypeError(
     "action.kind is not supported by the Runtime Core",
   );
@@ -240,8 +271,11 @@ function coreRequireNonEmptyStringArray(value, field) {
   }
 }
 
-function coreValidateExecutionProfiles(runPlan) {
+function coreValidateExecutionProfiles(runPlan, planningPolicy) {
   const roles = ["coding", "reviewerA", "reviewerB"];
+  const configured = new Map(
+    planningPolicy.executionProfiles.map((profile) => [profile.id, profile]),
+  );
   coreRequireOnlyKeys(
     runPlan.eligibleExecutionProfiles,
     roles,
@@ -269,7 +303,27 @@ function coreValidateExecutionProfiles(runPlan) {
         `result.runPlan.fallbackOrder.${role} must order every eligible profile exactly once`,
       );
     }
+    if (
+      runPlan.eligibleExecutionProfiles[role].some(
+        (profileId) => configured.get(profileId)?.role !== role,
+      )
+    ) {
+      return false;
+    }
   }
+  const reviewerAProviders = new Set(
+    runPlan.eligibleExecutionProfiles.reviewerA.map(
+      (profileId) => configured.get(profileId).servingProvider,
+    ),
+  );
+  if (
+    runPlan.eligibleExecutionProfiles.reviewerB.some((profileId) =>
+      reviewerAProviders.has(configured.get(profileId).servingProvider),
+    )
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function validatePlanningReport(request, state, observedAt) {
@@ -373,7 +427,17 @@ export function validatePlanningReport(request, state, observedAt) {
       "result.runPlan.remediationAllowance.maximumRounds must be 1",
     );
   }
-  coreValidateExecutionProfiles(runPlan);
+  const planningPolicy = directive.executionContext.planningPolicy;
+  if (
+    !coreValidateExecutionProfiles(runPlan, planningPolicy) ||
+    runPlan.reviewerDiversityMode !== planningPolicy.reviewerDiversityMode
+  ) {
+    return {
+      code: "InvalidExecutionResult",
+      message:
+        "Run Plan profiles do not satisfy the configured execution policy",
+    };
+  }
   if (runPlan.reviewerDiversityMode !== "distinct-serving-providers") {
     throw new TypeError(
       "result.runPlan.reviewerDiversityMode must be distinct-serving-providers",
@@ -484,6 +548,13 @@ export function proposePlanningReport(state, request, generated) {
         recordedAt: generated.acceptedAt,
       },
       effectIntents: [],
+      effectIntentUpdates: [
+        {
+          id: state.run.planningExecution.directive.effectIntent.id,
+          from: "Pending",
+          to: "Completed",
+        },
+      ],
       artifacts: [],
     },
   };
@@ -522,18 +593,6 @@ export function proposeOperatorAction(state, request, generated) {
     };
   }
   if (
-    request.action.kind === REVISE_PLAN &&
-    state.run?.confirmedPlan !== null
-  ) {
-    return {
-      rejection: {
-        code: "SuccessorRunRequired",
-        message:
-          "a confirmed objective, scope, or acceptance-boundary change requires a Successor Run",
-      },
-    };
-  }
-  if (
     offer.consumedRevision !== null ||
     offer.revision !== state.cursor.revision
   ) {
@@ -551,13 +610,47 @@ export function proposeOperatorAction(state, request, generated) {
     canonicalDigest(offer.constraints) !== canonicalDigest(
       request.action.kind === SUBMIT_OBJECTIVE
         ? SUBMIT_OBJECTIVE_CONSTRAINTS
-        : PLANNING_OPERATOR_ACTIONS[request.action.kind],
+        : (PLANNING_OPERATOR_ACTIONS[request.action.kind] ??
+          REQUEST_PLAN_CHANGE_CONSTRAINTS),
     )
   ) {
     return {
       rejection: {
         code: "MismatchedOffer",
         message: "offer is not bound to this principal, action, and constraints",
+      },
+    };
+  }
+  if (request.action.kind === REQUEST_PLAN_CHANGE) {
+    if (state.run?.confirmedPlan === null) {
+      return {
+        rejection: {
+          code: "ActionNotOffered",
+          message: "a confirmed Run Plan is required",
+        },
+      };
+    }
+    const proposedBoundary = request.action.payload;
+    const confirmedBoundary = {
+      objective: state.run.confirmedPlan.objective,
+      scope: state.run.confirmedPlan.scope,
+      acceptanceBoundary: state.run.confirmedPlan.acceptanceBoundary,
+    };
+    if (
+      canonicalDigest(proposedBoundary) === canonicalDigest(confirmedBoundary)
+    ) {
+      return {
+        rejection: {
+          code: "NoMaterialChange",
+          message: "the proposed Run Plan boundary is unchanged",
+        },
+      };
+    }
+    return {
+      rejection: {
+        code: "SuccessorRunRequired",
+        message:
+          "a confirmed objective, scope, or acceptance-boundary change requires a Successor Run",
       },
     };
   }
@@ -614,6 +707,10 @@ export function proposeOperatorAction(state, request, generated) {
           planRevision,
           priorPlan: structuredClone(run.plan),
           revisionGuidance: request.action.payload.guidance,
+          planningPolicy: structuredClone(
+            state.run.planningExecution.directive.executionContext
+              .planningPolicy,
+          ),
         },
         effectIntent: {
           id: generated.effectIntentId,
@@ -686,7 +783,12 @@ export function proposeOperatorAction(state, request, generated) {
         },
       };
     }
-    for (const field of ["acceptedAt", "commitId"]) {
+    for (const field of [
+      "acceptedAt",
+      "commitId",
+      "operatorIdentity",
+      "confirmedOperatorOffer",
+    ]) {
       requireNonEmptyString(generated[field], field);
     }
     const revision = state.cursor.revision + 1;
@@ -710,6 +812,17 @@ export function proposeOperatorAction(state, request, generated) {
       runId: run.id,
       acceptedAt: generated.acceptedAt,
     };
+    const createdOffers = [
+      {
+        offer: generated.confirmedOperatorOffer,
+        principal: generated.operatorIdentity,
+        revision,
+        authorityEpoch: state.authorityEpoch,
+        actionKind: REQUEST_PLAN_CHANGE,
+        constraints: REQUEST_PLAN_CHANGE_CONSTRAINTS,
+        consumedRevision: null,
+      },
+    ];
     return {
       candidate: {
         commitId: generated.commitId,
@@ -722,7 +835,7 @@ export function proposeOperatorAction(state, request, generated) {
         run,
         createsRun: false,
         consumedOffer: request.offer,
-        createdOffers: [],
+        createdOffers,
         offerConstraintsDigest: canonicalDigest(offer.constraints),
         audit: {
           actionKind: CONFIRM_PLAN,
@@ -892,6 +1005,7 @@ export function proposeOperatorAction(state, request, generated) {
           planRevision: 1,
           priorPlan: null,
           revisionGuidance: null,
+          planningPolicy: structuredClone(generated.planningPolicy),
         },
         effectIntent: {
           id: generated.effectIntentId,

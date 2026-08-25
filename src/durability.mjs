@@ -28,7 +28,7 @@ import {
   requireNonEmptyString,
 } from "./canonical.mjs";
 
-const DURABILITY_SCHEMA_VERSION = 2;
+const DURABILITY_SCHEMA_VERSION = 3;
 const DURABILITY_GENESIS_COMMIT_ID = "GENESIS";
 
 function durabilityDatabasePath(primaryRoot) {
@@ -268,6 +268,13 @@ function durabilityOpenDatabase(primaryRoot) {
       effect_kind TEXT NOT NULL,
       disposition TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS effect_intent_transitions (
+      commit_id TEXT NOT NULL REFERENCES commit_identities(commit_id),
+      effect_intent_id TEXT NOT NULL REFERENCES effect_intents(effect_intent_id),
+      from_disposition TEXT,
+      to_disposition TEXT NOT NULL,
+      PRIMARY KEY (commit_id, effect_intent_id)
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS artifacts (
       digest TEXT PRIMARY KEY,
       size INTEGER NOT NULL CHECK (size >= 0)
@@ -331,6 +338,14 @@ function durabilityOpenDatabase(primaryRoot) {
     CREATE TRIGGER IF NOT EXISTS immutable_run_revisions_delete
       BEFORE DELETE ON run_revisions BEGIN
         SELECT RAISE(ABORT, 'Run revisions are immutable');
+      END;
+    CREATE TRIGGER IF NOT EXISTS immutable_effect_transitions_update
+      BEFORE UPDATE ON effect_intent_transitions BEGIN
+        SELECT RAISE(ABORT, 'Effect Intent transitions are immutable');
+      END;
+    CREATE TRIGGER IF NOT EXISTS immutable_effect_transitions_delete
+      BEFORE DELETE ON effect_intent_transitions BEGIN
+        SELECT RAISE(ABORT, 'Effect Intent transitions are immutable');
       END;
     CREATE TRIGGER IF NOT EXISTS immutable_recovery_activations_update
       BEFORE UPDATE ON recovery_activations BEGIN
@@ -586,6 +601,9 @@ function durabilityVerifyCapsule(capsule) {
   if (!Array.isArray(capsule.artifacts)) {
     throw new Error("recovery capsule artifacts are invalid");
   }
+  if (!Array.isArray(capsule.effectIntentUpdates)) {
+    throw new Error("recovery capsule Effect Intent updates are invalid");
+  }
   if (!Array.isArray(capsule.mutations?.createdOffers)) {
     throw new Error("recovery capsule created offers are invalid");
   }
@@ -632,7 +650,15 @@ function durabilityVerifyCapsule(capsule) {
         capsule.authorization.executionContextDigest ||
       execution?.directive?.effectIntent?.id !==
         capsule.authorization.effectIntentId ||
-      execution?.status !== "Completed"
+      execution?.status !== "Completed" ||
+      canonicalJson(capsule.effectIntentUpdates) !==
+        canonicalJson([
+          {
+            id: capsule.authorization.effectIntentId,
+            from: "Pending",
+            to: "Completed",
+          },
+        ])
     ) {
       throw new Error(
         "capsule Planning result does not match its directive and Run mutation",
@@ -2245,6 +2271,38 @@ function durabilityApplyCapsule(
           effect.kind,
           effect.disposition,
         );
+      database
+        .prepare(
+          `INSERT INTO effect_intent_transitions
+             (commit_id, effect_intent_id, from_disposition, to_disposition)
+           VALUES (?, ?, NULL, ?)`,
+        )
+        .run(capsule.commitId, effect.id, effect.disposition);
+    }
+    for (const update of capsule.effectIntentUpdates) {
+      const current = database
+        .prepare(
+          "SELECT disposition FROM effect_intents WHERE effect_intent_id = ?",
+        )
+        .get(update.id);
+      if (current?.disposition !== update.from) {
+        throw new Error(
+          "Effect Intent update does not match its authoritative disposition",
+        );
+      }
+      database
+        .prepare(
+          `UPDATE effect_intents SET disposition = ?
+           WHERE effect_intent_id = ? AND disposition = ?`,
+        )
+        .run(update.to, update.id, update.from);
+      database
+        .prepare(
+          `INSERT INTO effect_intent_transitions
+             (commit_id, effect_intent_id, from_disposition, to_disposition)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run(capsule.commitId, update.id, update.from, update.to);
     }
     if (capsule.mutations.consumedOffer !== null) {
       database
@@ -2357,19 +2415,43 @@ function durabilityVerifyCommit(database, capsules, commitId, layout) {
   }
   const effects = database
     .prepare(
-      `SELECT effect_intent_id AS id, effect_kind AS kind, disposition
+      `SELECT effect_intent_id AS id, effect_kind AS kind
        FROM effect_intents WHERE commit_id = ? ORDER BY effect_intent_id`,
     )
     .all(capsule.commitId);
   if (
     canonicalJson(effects) !==
     canonicalJson(
-      [...capsule.effectIntents].sort((left, right) =>
-        left.id.localeCompare(right.id),
-      ),
+      [...capsule.effectIntents]
+        .map(({ id, kind }) => ({ id, kind }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
     )
   ) {
     throw new Error("authoritative Effect Intents differ from their capsule");
+  }
+  const effectTransitions = database
+    .prepare(
+      `SELECT effect_intent_id AS id, from_disposition AS "from",
+              to_disposition AS "to"
+       FROM effect_intent_transitions
+       WHERE commit_id = ? ORDER BY effect_intent_id`,
+    )
+    .all(capsule.commitId);
+  const expectedEffectTransitions = [
+    ...capsule.effectIntents.map((effect) => ({
+      id: effect.id,
+      from: null,
+      to: effect.disposition,
+    })),
+    ...capsule.effectIntentUpdates,
+  ].sort((left, right) => left.id.localeCompare(right.id));
+  if (
+    canonicalJson(effectTransitions) !==
+    canonicalJson(expectedEffectTransitions)
+  ) {
+    throw new Error(
+      "authoritative Effect Intent transitions differ from their capsule",
+    );
   }
   const artifacts = database
     .prepare(
@@ -2528,6 +2610,34 @@ function durabilityRecoverAndVerify(
       if (predecessor !== state.cursor.commitId) {
         throw new Error("authoritative cursor is not the commit history head");
       }
+      const latestDispositions = new Map();
+      for (const transition of database
+        .prepare(
+          `SELECT eit.effect_intent_id, eit.to_disposition
+           FROM effect_intent_transitions eit
+           JOIN commit_identities ci ON ci.commit_id = eit.commit_id
+           ORDER BY ci.revision`,
+        )
+        .all()) {
+        latestDispositions.set(
+          transition.effect_intent_id,
+          transition.to_disposition,
+        );
+      }
+      for (const effect of database
+        .prepare(
+          `SELECT effect_intent_id, disposition FROM effect_intents
+           ORDER BY effect_intent_id`,
+        )
+        .all()) {
+        if (
+          latestDispositions.get(effect.effect_intent_id) !== effect.disposition
+        ) {
+          throw new Error(
+            "authoritative Effect Intent disposition differs from its transition ledger",
+          );
+        }
+      }
     }
     durabilityRecoverReceiptCapsules(database, layout, true);
   });
@@ -2595,6 +2705,7 @@ function durabilityBuildCapsule(database, candidate) {
       },
     audit: candidate.audit,
     effectIntents: candidate.effectIntents,
+    effectIntentUpdates: candidate.effectIntentUpdates ?? [],
     artifacts: candidate.artifacts
       .map(({ digest, size }) => ({ digest, size }))
       .sort((left, right) => left.digest.localeCompare(right.digest)),

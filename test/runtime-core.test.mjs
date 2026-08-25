@@ -32,6 +32,32 @@ const PLANNING_PROFILE = Object.freeze({
   model: "scripted-plan-v1",
   runtime: "in-memory",
 });
+const EXECUTION_PROFILES = Object.freeze([
+  Object.freeze({
+    id: "profile:coding-primary",
+    role: "coding",
+    agentRoleIdentity: "agent-role:coding",
+    servingProvider: "provider:coding-primary",
+  }),
+  Object.freeze({
+    id: "profile:coding-fallback",
+    role: "coding",
+    agentRoleIdentity: "agent-role:coding",
+    servingProvider: "provider:coding-fallback",
+  }),
+  Object.freeze({
+    id: "profile:reviewer-a-primary",
+    role: "reviewerA",
+    agentRoleIdentity: "agent-role:reviewer-a",
+    servingProvider: "provider:reviewer-a",
+  }),
+  Object.freeze({
+    id: "profile:reviewer-b-primary",
+    role: "reviewerB",
+    agentRoleIdentity: "agent-role:reviewer-b",
+    servingProvider: "provider:reviewer-b",
+  }),
+]);
 
 function runtimeCoreOptions(primaryRoot, recoveryRoot) {
   let operatorOfferSequence = 0;
@@ -41,6 +67,7 @@ function runtimeCoreOptions(primaryRoot, recoveryRoot) {
     operatorIdentity: OPERATOR_ID,
     orchestratorIdentity: ORCHESTRATOR_ID,
     planningExecutionProfile: PLANNING_PROFILE,
+    executionProfiles: EXECUTION_PROFILES,
     configurationRevision: "configuration:test-1",
     effectiveConfigurationDigest: CONFIGURATION_DIGEST,
     secretReferenceGenerations: {
@@ -120,6 +147,7 @@ function withPlanningRuntimeCore(testBody, { clock } = {}) {
       core,
       options,
       primaryRoot,
+      recoveryRoot,
       close() {
         core.close();
         core = undefined;
@@ -305,6 +333,7 @@ function addConflictingGeneration(recoveryRoot) {
       database.exec("DROP TRIGGER immutable_request_receipts_update");
       database.exec("DROP TRIGGER immutable_audit_records_update");
       database.exec("DROP TRIGGER immutable_run_revisions_update");
+      database.exec("DROP TRIGGER immutable_effect_transitions_update");
       database
         .prepare(
           `UPDATE commit_identities
@@ -339,6 +368,11 @@ function addConflictingGeneration(recoveryRoot) {
         .run(conflictingCapsule.commitId, originalCapsule.commitId);
       database
         .prepare("UPDATE effect_intents SET commit_id = ? WHERE commit_id = ?")
+        .run(conflictingCapsule.commitId, originalCapsule.commitId);
+      database
+        .prepare(
+          "UPDATE effect_intent_transitions SET commit_id = ? WHERE commit_id = ?",
+        )
         .run(conflictingCapsule.commitId, originalCapsule.commitId);
       database
         .prepare("UPDATE run_revisions SET commit_id = ? WHERE commit_id = ?")
@@ -652,6 +686,10 @@ test("Act durably creates one Planning Run before acknowledging it", () =>
             planRevision: 1,
             priorPlan: null,
             revisionGuidance: null,
+            planningPolicy: {
+              executionProfiles: EXECUTION_PROFILES,
+              reviewerDiversityMode: "distinct-serving-providers",
+            },
           },
           effectIntent: {
             id: "effect-intent:test-1",
@@ -761,6 +799,10 @@ test("execution Pull exposes the immutable bounded Planning directive", () =>
           planRevision: 1,
           priorPlan: null,
           revisionGuidance: null,
+          planningPolicy: {
+            executionProfiles: EXECUTION_PROFILES,
+            reviewerDiversityMode: "distinct-serving-providers",
+          },
         },
         effectIntent: {
           id: "effect-intent:test-1",
@@ -929,6 +971,24 @@ test("a scripted Report remains an observation until result and evidence validat
       agentRoleIdentity: ORCHESTRATOR_ID,
     });
     const result = validPlanningResult();
+    const unknownProfileResult = structuredClone(result);
+    unknownProfileResult.runPlan.eligibleExecutionProfiles.coding = [
+      "profile:not-configured",
+    ];
+    unknownProfileResult.runPlan.fallbackOrder.coding = [
+      "profile:not-configured",
+    ];
+    const unknownProfile = await core.execution({
+      kind: "Report",
+      agentRoleIdentity: ORCHESTRATOR_ID,
+      factId: "fact:unknown-profile-result",
+      directive: pulled.directive.capability,
+      result: unknownProfileResult,
+      evidence: planningEvidence(unknownProfileResult),
+    });
+    assert.equal(unknownProfile.status, "rejected");
+    assert.equal(unknownProfile.rejection.code, "InvalidExecutionResult");
+
     const invalidRequest = {
       kind: "Report",
       agentRoleIdentity: ORCHESTRATOR_ID,
@@ -1133,7 +1193,9 @@ test("ConfirmPlan freezes the complete execution authority boundary", () =>
       confirmedAt: "2026-08-13T00:00:00.000Z",
       ...result.runPlan,
     });
-    assert.deepEqual(confirmed.offers, []);
+    assert.deepEqual(confirmed.offers.map(({ kind }) => kind), [
+      "RequestPlanChange",
+    ]);
 
     confirmed.view.run.confirmedPlan.scope.push("caller mutation");
     const restarted = reopen();
@@ -1180,7 +1242,6 @@ test("a material plan change after confirmation requires a Successor Run", () =>
   withPlanningRuntimeCore(async ({ core, reopen }) => {
     const waiting = await completePlanningExecution(core);
     const confirm = waiting.offers.find(({ kind }) => kind === "ConfirmPlan");
-    const revise = waiting.offers.find(({ kind }) => kind === "RevisePlan");
     const confirmed = await core.operator({
       kind: "Act",
       principal: OPERATOR_ID,
@@ -1189,16 +1250,44 @@ test("a material plan change after confirmation requires a Successor Run", () =>
       offer: confirm.offer,
       action: { kind: "ConfirmPlan", payload: {} },
     });
+    const requestChange = confirmed.offers.find(
+      ({ kind }) => kind === "RequestPlanChange",
+    );
+
+    const unchanged = await core.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:keep-confirmed-plan",
+      offer: requestChange.offer,
+      action: {
+        kind: "RequestPlanChange",
+        payload: {
+          objective: confirmed.view.run.confirmedPlan.objective,
+          scope: confirmed.view.run.confirmedPlan.scope,
+          acceptanceBoundary:
+            confirmed.view.run.confirmedPlan.acceptanceBoundary,
+        },
+      },
+    });
+    assert.equal(unchanged.status, "rejected");
+    assert.equal(unchanged.rejection.code, "NoMaterialChange");
+    assert.deepEqual(unchanged.cursor, confirmed.cursor);
 
     const rejected = await core.operator({
       kind: "Act",
       principal: OPERATOR_ID,
       locale: "en",
       requestId: "request:change-confirmed-plan",
-      offer: revise.offer,
+      offer: requestChange.offer,
       action: {
-        kind: "RevisePlan",
-        payload: { guidance: "Broaden the objective and acceptance boundary" },
+        kind: "RequestPlanChange",
+        payload: {
+          objective: "Broaden the confirmed objective",
+          scope: confirmed.view.run.confirmedPlan.scope,
+          acceptanceBoundary:
+            confirmed.view.run.confirmedPlan.acceptanceBoundary,
+        },
       },
     });
 
@@ -1213,18 +1302,28 @@ test("a material plan change after confirmation requires a Successor Run", () =>
       principal: OPERATOR_ID,
       locale: "zh-TW",
       requestId: "request:change-confirmed-plan",
-      offer: revise.offer,
+      offer: requestChange.offer,
       action: {
-        kind: "RevisePlan",
-        payload: { guidance: "Broaden the objective and acceptance boundary" },
+        kind: "RequestPlanChange",
+        payload: {
+          objective: "Broaden the confirmed objective",
+          scope: confirmed.view.run.confirmedPlan.scope,
+          acceptanceBoundary:
+            confirmed.view.run.confirmedPlan.acceptanceBoundary,
+        },
       },
     });
     assert.equal(duplicate.status, "duplicate");
     assert.deepEqual(duplicate.receipt, rejected.receipt);
   }));
 
-test("AbandonRun with no active Execution durably commits Abandoned", () =>
-  withPlanningRuntimeCore(async ({ core, reopen }) => {
+test("AbandonRun with no active or uncertain work durably commits Abandoned", () =>
+  withPlanningRuntimeCore(async ({
+    core,
+    close,
+    options,
+    primaryRoot,
+  }) => {
     const waiting = await completePlanningExecution(core);
     const abandon = waiting.offers.find(({ kind }) => kind === "AbandonRun");
 
@@ -1246,14 +1345,31 @@ test("AbandonRun with no active Execution durably commits Abandoned", () =>
     assert.equal(abandoned.view.run.lastCommittedTransition, "AbandonRun");
     assert.deepEqual(abandoned.offers, []);
 
-    const restarted = reopen();
-    const observed = await restarted.operator({
+    close();
+    rmSync(primaryRoot, { recursive: true });
+    const recoveryCore = openRuntimeCore(options);
+    const recovery = await recoveryCore.operator({
       kind: "Observe",
       principal: OPERATOR_ID,
       locale: "en",
     });
-    assert.equal(observed.view.run.outcome, "Abandoned");
-    assert.deepEqual(observed.cursor, abandoned.cursor);
+    const restored = await recoveryCore.operator({
+      kind: "Act",
+      principal: OPERATOR_ID,
+      locale: "en",
+      requestId: "request:restore-abandoned-run",
+      offer: recovery.offers[0].offer,
+      action: {
+        kind: "Restore",
+        payload: {
+          recoveryPoint: recovery.view.recovery.recoveryPoints[0].id,
+        },
+      },
+    });
+    assert.equal(restored.view.run.outcome, "Abandoned");
+    assert.equal(restored.view.recovery, undefined);
+    assert.deepEqual(restored.cursor, abandoned.cursor);
+    recoveryCore.close();
   }));
 
 test("AbandonRun with active Planning work enters cancellation convergence", () =>
