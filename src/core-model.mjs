@@ -74,6 +74,33 @@ const REQUEST_PLAN_CHANGE_CONSTRAINTS = Object.freeze({
   }),
 });
 
+function coreCreatePlanningControlOffers(
+  generated,
+  revision,
+  authorityEpoch,
+) {
+  requireNonEmptyString(generated.operatorIdentity, "operatorIdentity");
+  if (
+    !Array.isArray(generated.activeOperatorOffers) ||
+    generated.activeOperatorOffers.length !== 2
+  ) {
+    throw new TypeError("activeOperatorOffers must contain two offers");
+  }
+  return [ABANDON_RUN, CANCEL_RUN].map((actionKind, index) => {
+    const createdOffer = generated.activeOperatorOffers[index];
+    requireNonEmptyString(createdOffer, "active Operator offer");
+    return {
+      offer: createdOffer,
+      principal: generated.operatorIdentity,
+      revision,
+      authorityEpoch,
+      actionKind,
+      constraints: PLANNING_OPERATOR_ACTIONS[actionKind],
+      consumedRevision: null,
+    };
+  });
+}
+
 function coreRequireOnlyKeys(value, allowedKeys, field) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError(`${field} must be an object`);
@@ -684,6 +711,11 @@ export function proposeOperatorAction(state, request, generated) {
     }
     const planRevision = state.run.planRevision + 1;
     const revision = state.cursor.revision + 1;
+    const createdOffers = coreCreatePlanningControlOffers(
+      generated,
+      revision,
+      state.authorityEpoch,
+    );
     const run = structuredClone(state.run);
     run.condition = "Active";
     run.planRevision = planRevision;
@@ -748,7 +780,7 @@ export function proposeOperatorAction(state, request, generated) {
         run,
         createsRun: false,
         consumedOffer: request.offer,
-        createdOffers: [],
+        createdOffers,
         offerConstraintsDigest: canonicalDigest(offer.constraints),
         audit: {
           actionKind: REVISE_PLAN,
@@ -956,23 +988,10 @@ export function proposeOperatorAction(state, request, generated) {
     startedAt.valueOf() + 10 * 60 * 1_000,
   ).toISOString();
   const revision = state.cursor.revision + 1;
-  if (!Array.isArray(generated.activeOperatorOffers)) {
-    throw new TypeError("activeOperatorOffers must be an array");
-  }
-  const createdOffers = [ABANDON_RUN, CANCEL_RUN].map(
-    (actionKind, index) => {
-      const createdOffer = generated.activeOperatorOffers[index];
-      requireNonEmptyString(createdOffer, "active Operator offer");
-      return {
-        offer: createdOffer,
-        principal: generated.operatorIdentity,
-        revision,
-        authorityEpoch: state.authorityEpoch,
-        actionKind,
-        constraints: PLANNING_OPERATOR_ACTIONS[actionKind],
-        consumedRevision: null,
-      };
-    },
+  const createdOffers = coreCreatePlanningControlOffers(
+    generated,
+    revision,
+    state.authorityEpoch,
   );
   const run = {
     id: generated.runId,

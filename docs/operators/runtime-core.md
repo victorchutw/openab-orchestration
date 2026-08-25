@@ -271,7 +271,9 @@ After a valid Planning result, Observe offers `ConfirmPlan`, `RevisePlan`,
 
 - `RevisePlan` accepts bounded textual guidance. It creates the next plan
   revision and a fresh initial Orchestrator Execution, directive, context, and
-  Effect Intent in the same Run. It does not consume a failure replacement.
+  Effect Intent in the same Run. The revised pending Execution receives fresh
+  `AbandonRun` and `CancelRun` offers at its new cursor. It does not consume a
+  failure replacement.
 - `ConfirmPlan` freezes the objective, scope, acceptance boundary, evidence
   requirements, one-round remediation allowance, eligible profiles, fallback
   order, and distinct-Serving-Provider reviewer policy. The Run then enters
