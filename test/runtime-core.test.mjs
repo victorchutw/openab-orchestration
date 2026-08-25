@@ -1165,6 +1165,92 @@ test("RevisePlan creates the next Planning Execution without using a replacement
     assert.deepEqual(secondWaiting.view.run.plan, secondResult.runPlan);
   }));
 
+test("revised Planning expiry retains cancellation authority", () => {
+  let now = "2026-08-13T00:00:00.000Z";
+  return withPlanningRuntimeCore(
+    async ({ core, reopen }) => {
+      const waiting = await completePlanningExecution(core);
+      const revise = waiting.offers.find(({ kind }) => kind === "RevisePlan");
+      const earlierCancel = waiting.offers.find(
+        ({ kind }) => kind === "CancelRun",
+      );
+      const revised = await core.operator({
+        kind: "Act",
+        principal: OPERATOR_ID,
+        locale: "en",
+        requestId: "request:revise-plan-before-expiry",
+        offer: revise.offer,
+        action: {
+          kind: "RevisePlan",
+          payload: { guidance: "Keep cancellation authority available" },
+        },
+      });
+
+      assert.deepEqual(
+        revised.offers.map(({ kind }) => kind),
+        ["AbandonRun", "CancelRun"],
+      );
+      const replacementCancel = revised.offers.find(
+        ({ kind }) => kind === "CancelRun",
+      );
+      assert.notEqual(replacementCancel.offer, earlierCancel.offer);
+
+      const restarted = reopen();
+      const persisted = await restarted.operator({
+        kind: "Observe",
+        principal: OPERATOR_ID,
+        locale: "en",
+      });
+      assert.deepEqual(persisted.offers, revised.offers);
+
+      now = "2026-08-13T00:10:00.000Z";
+      assert.equal(
+        (
+          await restarted.execution({
+            kind: "Pull",
+            agentRoleIdentity: ORCHESTRATOR_ID,
+          })
+        ).status,
+        "expired",
+      );
+
+      const stale = await restarted.operator({
+        kind: "Act",
+        principal: OPERATOR_ID,
+        locale: "en",
+        requestId: "request:cancel-with-earlier-offer",
+        offer: earlierCancel.offer,
+        action: { kind: "CancelRun", payload: {} },
+      });
+      assert.equal(stale.status, "rejected");
+      assert.equal(stale.rejection.code, "StaleOffer");
+      assert.deepEqual(stale.cursor, revised.cursor);
+
+      const cancelling = await restarted.operator({
+        kind: "Act",
+        principal: OPERATOR_ID,
+        locale: "zh-TW",
+        requestId: "request:cancel-revised-planning",
+        offer: replacementCancel.offer,
+        action: { kind: "CancelRun", payload: {} },
+      });
+      assert.equal(cancelling.status, "accepted");
+      assert.equal(cancelling.view.run.condition, "Cancelling");
+      assert.deepEqual(cancelling.offers, []);
+
+      const restartedAfterCancellation = reopen();
+      const observed = await restartedAfterCancellation.operator({
+        kind: "Observe",
+        principal: OPERATOR_ID,
+        locale: "en",
+      });
+      assert.equal(observed.view.run.condition, "Cancelling");
+      assert.deepEqual(observed.cursor, cancelling.cursor);
+    },
+    { clock: () => now },
+  );
+});
+
 test("ConfirmPlan freezes the complete execution authority boundary", () =>
   withPlanningRuntimeCore(async ({ core, reopen }) => {
     const result = validPlanningResult();

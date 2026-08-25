@@ -461,7 +461,10 @@ export function openRuntimeCore(rawOptions) {
             },
           });
         }
-        if (request.action.kind === "SubmitObjective") {
+        if (
+          request.action.kind === "SubmitObjective" ||
+          request.action.kind === "RevisePlan"
+        ) {
           generated.operatorIdentity = options.operatorIdentity;
           generated.activeOperatorOffers = Array.from(
             { length: 2 },
@@ -520,8 +523,9 @@ export function openRuntimeCore(rawOptions) {
         if (durability.kind === "RecoveryRequired") {
           return { status: "unavailable", reason: "RecoveryRequired" };
         }
-        const execution = durability.inspect().run?.planningExecution;
-        const run = durability.inspect().run;
+        const state = durability.inspect();
+        const run = state.run;
+        const execution = run?.planningExecution;
         if (run?.condition === "Cancelling") {
           return { status: "withheld", reason: "CancellationInProgress" };
         }
