@@ -11,6 +11,26 @@ const core = openRuntimeCore({
   operatorIdentity,
   orchestratorIdentity,
   planningExecutionProfile,
+  executionProfiles: [
+    {
+      id: "profile:coding-primary",
+      role: "coding",
+      agentRoleIdentity: "agent-role:coding",
+      servingProvider: "provider:coding-primary",
+    },
+    {
+      id: "profile:reviewer-a-primary",
+      role: "reviewerA",
+      agentRoleIdentity: "agent-role:reviewer-a",
+      servingProvider: "provider:reviewer-a",
+    },
+    {
+      id: "profile:reviewer-b-primary",
+      role: "reviewerB",
+      agentRoleIdentity: "agent-role:reviewer-b",
+      servingProvider: "provider:reviewer-b",
+    },
+  ],
   configurationRevision,
   effectiveConfigurationDigest,
   secretReferenceGenerations,
@@ -191,9 +211,11 @@ const report = await core.execution({
 ID, Run and plan revision, Orchestrator Agent Role Identity, immutable Execution
 Profile, `openab.execution-context/v1` value, authority epoch, delivery
 generation, and `StartPlanningExecution` Effect Intent. The context contains
-the objective and, for a revision, the prior plan and Operator guidance. The
-directive carries a 600,000 millisecond safety limit. At or after its deadline,
-Pull reports expiry and a Report cannot establish Execution Completion.
+the objective, the Installation's eligible Coding and Reviewer Execution
+Profiles, the distinct-Serving-Provider reviewer policy, and, for a revision,
+the prior plan and Operator guidance. The directive carries a 600,000
+millisecond safety limit. At or after its deadline, Pull reports expiry and a
+Report cannot establish Execution Completion.
 
 A successful result has this shape:
 
@@ -226,13 +248,18 @@ A successful result has this shape:
 }
 ```
 
-Every eligible profile must appear exactly once in that role's deterministic
-fallback order. Evidence uses `openab.verification-evidence/v1`, kind
+Every proposed profile must be configured for its declared role in the
+directive's immutable planning policy, and every eligible profile must appear
+exactly once in that role's deterministic fallback order. Reviewer A and
+Reviewer B profiles must retain distinct Agent Role Identities and Serving
+Providers. Evidence uses `openab.verification-evidence/v1`, kind
 `ScriptedPlanningResult`, and a `resultDigest` equal to the canonical digest of
 the complete result. A Report is only an observation: wrong directive,
-identity, profile, revision, result format, evidence, or timing is rejected
-without Completion or a cursor change. A valid Report reaches the recovery-first
-commit boundary before the Run moves to `Planning / Waiting for Operator`.
+identity, profile, revision, result format, evidence, policy, or timing is
+rejected without Completion or a cursor change. A valid Report reaches the
+recovery-first commit boundary, records the Planning Effect Intent transition
+from `Pending` to `Completed`, and then moves the Run to
+`Planning / Waiting for Operator`.
 
 ## Operator Run Plan actions
 
@@ -245,13 +272,18 @@ After a valid Planning result, Observe offers `ConfirmPlan`, `RevisePlan`,
 - `ConfirmPlan` freezes the objective, scope, acceptance boundary, evidence
   requirements, one-round remediation allowance, eligible profiles, fallback
   order, and distinct-Serving-Provider reviewer policy. The Run then enters
-  `Coding / Active`; this planning implementation does not dispatch Coding.
+  `Coding / Active`, where a fresh `RequestPlanChange` capability is the only
+  planning-boundary action. An unchanged objective, scope, and acceptance
+  boundary is rejected as `NoMaterialChange`; changing any of them is rejected
+  as `SuccessorRunRequired`. This planning implementation does not dispatch
+  Coding.
 - `AbandonRun` with no active work commits terminal `Abandoned`. With active
   Planning work it enters `Cancelling` and records that Abandonment follows
   convergence. `CancelRun` follows the same convergence rule and can commit
   terminal `Cancelled` when no work remains active or uncertain.
-- A `RevisePlan` request that refers to a plan already confirmed receives
-  `SuccessorRunRequired`; it cannot mutate the confirmed Run.
+- A pre-confirmation `RevisePlan` offer becomes stale at confirmation and
+  cannot mutate the confirmed Run. Post-confirmation boundary changes require
+  the newly bound `RequestPlanChange` capability and a Successor Run.
 
 Each Run view exposes canonical Stage, Condition, current and next actor, last
 committed transition, plan revision, and legal action kinds. `en` and `zh-TW`

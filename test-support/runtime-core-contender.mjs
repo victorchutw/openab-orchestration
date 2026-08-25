@@ -14,6 +14,26 @@ const core = openRuntimeCore({
     model: "scripted-plan-v1",
     runtime: "in-memory",
   },
+  executionProfiles: [
+    {
+      id: "profile:coding-primary",
+      role: "coding",
+      agentRoleIdentity: "agent-role:coding",
+      servingProvider: "provider:coding",
+    },
+    {
+      id: "profile:reviewer-a-primary",
+      role: "reviewerA",
+      agentRoleIdentity: "agent-role:reviewer-a",
+      servingProvider: "provider:reviewer-a",
+    },
+    {
+      id: "profile:reviewer-b-primary",
+      role: "reviewerB",
+      agentRoleIdentity: "agent-role:reviewer-b",
+      servingProvider: "provider:reviewer-b",
+    },
+  ],
   configurationRevision: "configuration:test-1",
   effectiveConfigurationDigest: `sha256:${"a".repeat(64)}`,
   secretReferenceGenerations: {

@@ -8,6 +8,7 @@ import {
   authorizeOperatorRequest,
   createInitialOffer,
   createRejectionReceipt,
+  executionRequestContent,
   executionRequestDigest,
   operatorRequestContent,
   operatorRequestDigest,
@@ -17,6 +18,61 @@ import {
   validatePlanningReport,
 } from "./core-model.mjs";
 import { openDurability } from "./durability.mjs";
+
+function runtimeNormalizeExecutionProfiles(profiles) {
+  if (!Array.isArray(profiles) || profiles.length === 0) {
+    throw new TypeError("executionProfiles must be a non-empty array");
+  }
+  const allowedRoles = ["coding", "reviewerA", "reviewerB"];
+  const seenIds = new Set();
+  const normalized = profiles.map((profile) => {
+    if (
+      profile === null ||
+      typeof profile !== "object" ||
+      Array.isArray(profile) ||
+      Object.keys(profile).some(
+        (key) =>
+          !["id", "role", "agentRoleIdentity", "servingProvider"].includes(
+            key,
+          ),
+      )
+    ) {
+      throw new TypeError("executionProfiles entries are invalid");
+    }
+    for (const field of ["id", "role", "agentRoleIdentity", "servingProvider"]) {
+      requireNonEmptyString(profile[field], `executionProfiles.${field}`);
+    }
+    if (!allowedRoles.includes(profile.role)) {
+      throw new TypeError("executionProfiles.role is not supported");
+    }
+    if (seenIds.has(profile.id)) {
+      throw new TypeError("executionProfiles IDs must be unique");
+    }
+    seenIds.add(profile.id);
+    return structuredClone(profile);
+  });
+  for (const role of allowedRoles) {
+    if (!normalized.some((profile) => profile.role === role)) {
+      throw new TypeError(`executionProfiles requires a ${role} profile`);
+    }
+  }
+  const reviewerA = normalized.filter(({ role }) => role === "reviewerA");
+  const reviewerB = normalized.filter(({ role }) => role === "reviewerB");
+  if (
+    reviewerA.some((left) =>
+      reviewerB.some(
+        (right) =>
+          left.agentRoleIdentity === right.agentRoleIdentity ||
+          left.servingProvider === right.servingProvider,
+      ),
+    )
+  ) {
+    throw new TypeError(
+      "Reviewer execution profiles require distinct identities and Serving Providers",
+    );
+  }
+  return normalized;
+}
 
 function runtimeNormalizeOptions(options) {
   for (const field of [
@@ -85,6 +141,12 @@ function runtimeNormalizeOptions(options) {
   }
   return {
     ...options,
+    planningExecutionProfile: structuredClone(
+      options.planningExecutionProfile,
+    ),
+    executionProfiles: runtimeNormalizeExecutionProfiles(
+      options.executionProfiles,
+    ),
     identifiers,
     clock: options.clock ?? (() => new Date().toISOString()),
   };
@@ -108,58 +170,41 @@ function runtimeDurablyReject(
   conflictWithDigest,
   projectReply = runtimeRejectedReply,
 ) {
-  const receipt = createRejectionReceipt(
-    durability.inspect(),
-    request,
-    rejection,
-    options.clock(),
-  );
+  const executionReport = request.kind === "Report";
+  const requestId = executionReport ? request.factId : request.requestId;
+  const receipt = executionReport
+    ? {
+        status: "rejected",
+        requestId,
+        actionKind: "ReportPlanningResult",
+        cursor: structuredClone(durability.inspect().cursor),
+        rejection: structuredClone(rejection),
+        rejectedAt: options.clock(),
+      }
+    : createRejectionReceipt(
+        durability.inspect(),
+        request,
+        rejection,
+        options.clock(),
+      );
   const durableReceipt = durability.reject({
-    requestId: request.requestId,
+    requestId,
     requestDigest,
-    requestContent: operatorRequestContent(request),
+    requestContent: executionReport
+      ? executionRequestContent(request)
+      : operatorRequestContent(request),
     conflictWithDigest,
     receipt,
   });
+  if (executionReport) {
+    return { status: "rejected", rejection, receipt: durableReceipt };
+  }
   return projectReply(
     durability,
     request,
     rejection,
     durableReceipt,
   );
-}
-
-function runtimeDurablyRejectExecution(
-  durability,
-  options,
-  request,
-  requestDigest,
-  rejection,
-  conflictWithDigest,
-) {
-  const receipt = {
-    status: "rejected",
-    requestId: request.factId,
-    actionKind: "ReportPlanningResult",
-    cursor: structuredClone(durability.inspect().cursor),
-    rejection: structuredClone(rejection),
-    rejectedAt: options.clock(),
-  };
-  const durableReceipt = durability.reject({
-    requestId: request.factId,
-    requestDigest,
-    requestContent: {
-      kind: request.kind,
-      agentRoleIdentity: request.agentRoleIdentity,
-      factId: request.factId,
-      directive: request.directive,
-      result: structuredClone(request.result),
-      evidence: structuredClone(request.evidence),
-    },
-    conflictWithDigest,
-    receipt,
-  });
-  return { status: "rejected", rejection, receipt: durableReceipt };
 }
 
 function runtimeRecoveryReply(state, request, recoveryOffer, result) {
@@ -406,6 +451,10 @@ export function openRuntimeCore(rawOptions) {
             directiveCapability: options.identifiers.directive(),
             orchestratorIdentity: options.orchestratorIdentity,
             planningExecutionProfile: options.planningExecutionProfile,
+            planningPolicy: {
+              executionProfiles: options.executionProfiles,
+              reviewerDiversityMode: "distinct-serving-providers",
+            },
           });
         }
         if (request.action.kind === "SubmitObjective") {
@@ -414,6 +463,10 @@ export function openRuntimeCore(rawOptions) {
             { length: 2 },
             () => options.identifiers.operatorOffer(),
           );
+        }
+        if (request.action.kind === "ConfirmPlan") {
+          generated.operatorIdentity = options.operatorIdentity;
+          generated.confirmedOperatorOffer = options.identifiers.operatorOffer();
         }
         const proposed = proposeOperatorAction(
           transaction.inspect(),
@@ -501,7 +554,7 @@ export function openRuntimeCore(rawOptions) {
               code: "RequestIdConflict",
               message: "factId was already used with different content",
           };
-          return runtimeDurablyRejectExecution(
+          return runtimeDurablyReject(
             transaction,
             options,
             request,
@@ -520,7 +573,7 @@ export function openRuntimeCore(rawOptions) {
           observedAt,
         );
         if (rejection !== null) {
-          return runtimeDurablyRejectExecution(
+          return runtimeDurablyReject(
             transaction,
             options,
             request,
