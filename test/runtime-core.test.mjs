@@ -1372,6 +1372,75 @@ test("AbandonRun with no active or uncertain work durably commits Abandoned", ()
     recoveryCore.close();
   }));
 
+test("Restore rebinds Waiting for Operator actions under the new authority epoch", () =>
+  withPlanningRuntimeCore(async ({
+    core,
+    close,
+    options,
+    primaryRoot,
+  }) => {
+    const waiting = await completePlanningExecution(core);
+    const earlierOffers = waiting.offers.map(({ offer }) => offer);
+    close();
+    rmSync(primaryRoot, { recursive: true });
+
+    const recoveryCore = openRuntimeCore(options);
+    try {
+      const recovery = await recoveryCore.operator({
+        kind: "Observe",
+        principal: OPERATOR_ID,
+        locale: "en",
+      });
+      const restored = await recoveryCore.operator({
+        kind: "Act",
+        principal: OPERATOR_ID,
+        locale: "en",
+        requestId: "request:restore-waiting-plan",
+        offer: recovery.offers[0].offer,
+        action: {
+          kind: "Restore",
+          payload: {
+            recoveryPoint: recovery.view.recovery.recoveryPoints[0].id,
+          },
+        },
+      });
+
+      assert.equal(restored.view.authorityEpoch, 2);
+      assert.equal(restored.view.run.condition, "Waiting for Operator");
+      assert.equal(restored.view.recovery, undefined);
+      assert.deepEqual(restored.view.legalActions, [
+        "AbandonRun",
+        "CancelRun",
+        "ConfirmPlan",
+        "RevisePlan",
+      ]);
+      assert.deepEqual(
+        restored.offers.map(({ kind }) => kind),
+        restored.view.legalActions,
+      );
+      assert.equal(
+        restored.offers.every(({ offer }) => !earlierOffers.includes(offer)),
+        true,
+      );
+
+      const confirm = restored.offers.find(
+        ({ kind }) => kind === "ConfirmPlan",
+      );
+      const confirmed = await recoveryCore.operator({
+        kind: "Act",
+        principal: OPERATOR_ID,
+        locale: "zh-TW",
+        requestId: "request:confirm-restored-plan",
+        offer: confirm.offer,
+        action: { kind: "ConfirmPlan", payload: {} },
+      });
+      assert.equal(confirmed.status, "accepted");
+      assert.equal(confirmed.view.run.stage, "Coding");
+    } finally {
+      recoveryCore.close();
+    }
+  }));
+
 test("AbandonRun with active Planning work enters cancellation convergence", () =>
   withPlanningRuntimeCore(async ({ core, reopen }) => {
     const initial = await core.operator({
@@ -2007,7 +2076,7 @@ test(
       }),
       recoveryPointId: recoveryPoint.id,
       restoredAt,
-      replacementOffer: initialOffer,
+      replacementOfferId: () => initialOffer.offer,
     });
   }
 

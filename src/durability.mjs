@@ -28,7 +28,7 @@ import {
   requireNonEmptyString,
 } from "./canonical.mjs";
 
-const DURABILITY_SCHEMA_VERSION = 3;
+const DURABILITY_SCHEMA_VERSION = 4;
 const DURABILITY_GENESIS_COMMIT_ID = "GENESIS";
 
 function durabilityDatabasePath(primaryRoot) {
@@ -288,6 +288,7 @@ function durabilityOpenDatabase(primaryRoot) {
       request_id TEXT PRIMARY KEY,
       request_digest TEXT NOT NULL,
       receipt_json TEXT NOT NULL,
+      replacement_offers_json TEXT NOT NULL,
       source_recovery_point TEXT NOT NULL,
       source_manifest_digest TEXT NOT NULL,
       restored_at TEXT NOT NULL,
@@ -542,6 +543,46 @@ function durabilityReadState(database) {
           }
         : null,
   };
+}
+
+function durabilityVerifyRecoveryOfferRebindings(database) {
+  for (const activation of database
+    .prepare(
+      `SELECT authority_epoch, receipt_json, replacement_offers_json
+       FROM recovery_activations ORDER BY authority_epoch`,
+    )
+    .all()) {
+    const receipt = JSON.parse(activation.receipt_json);
+    const expected = JSON.parse(activation.replacement_offers_json);
+    if (
+      !Array.isArray(expected) ||
+      canonicalJson(expected) !== activation.replacement_offers_json
+    ) {
+      throw new Error("Restore replacement Operator offers are invalid");
+    }
+    const actual = database
+      .prepare(
+        `SELECT offer, principal, revision, authority_epoch, action_kind,
+                constraints_json
+         FROM operator_offers
+         WHERE authority_epoch = ? AND revision = ?
+         ORDER BY action_kind, offer`,
+      )
+      .all(activation.authority_epoch, receipt.cursor.revision)
+      .map((offer) => ({
+        offer: offer.offer,
+        principal: offer.principal,
+        revision: offer.revision,
+        authorityEpoch: offer.authority_epoch,
+        actionKind: offer.action_kind,
+        constraints: JSON.parse(offer.constraints_json),
+      }));
+    if (canonicalJson(actual) !== canonicalJson(expected)) {
+      throw new Error(
+        "authoritative replacement Operator offers differ from Restore",
+      );
+    }
+  }
 }
 
 function durabilityReadReferencedArtifacts(database) {
@@ -970,6 +1011,7 @@ function durabilityReadVerifiedGenerations(layout) {
         }
         const state = durabilityReadState(database);
         const metadata = durabilityReadMetadata(database);
+        durabilityVerifyRecoveryOfferRebindings(database);
         history = database
           .prepare(
             `SELECT commit_id, predecessor, revision
@@ -1457,7 +1499,7 @@ function durabilityRecoveryRequired(layout, options) {
       requestDigest,
       recoveryPointId,
       restoredAt,
-      replacementOffer,
+      replacementOfferId,
     }) {
       const selected = analysis.availablePoints.find(
         (point) => point.public.id === recoveryPointId,
@@ -1472,7 +1514,7 @@ function durabilityRecoveryRequired(layout, options) {
         request,
         requestDigest,
         restoredAt,
-        replacementOffer,
+        replacementOfferId,
       });
     },
     close() {},
@@ -1602,7 +1644,7 @@ function durabilityRestorePrimary({
   request,
   requestDigest,
   restoredAt,
-  replacementOffer,
+  replacementOfferId,
 }) {
   const currentAnalysis = durabilityAnalyzeRecovery(layout, options);
   const selectedStillOffered = currentAnalysis.availablePoints.some(
@@ -1692,6 +1734,38 @@ function durabilityRestorePrimary({
       .map((row) => row.effect_intent_id);
     const recoveryGate =
       pendingEffects.length === 0 ? "Open" : "Reconciliation";
+    const replacementOffers =
+      recoveryGate === "Open"
+        ? candidate
+            .prepare(
+              `SELECT principal, revision, action_kind, constraints_json
+               FROM operator_offers
+               WHERE consumed_revision IS NULL AND revision = ?
+               ORDER BY action_kind`,
+            )
+            .all(before.cursor.revision)
+            .map((offer) => {
+              const replacementId = replacementOfferId(offer.action_kind);
+              requireNonEmptyString(
+                replacementId,
+                "replacementOfferId result",
+              );
+              return {
+                offer: replacementId,
+                principal: offer.principal,
+                revision: offer.revision,
+                authorityEpoch,
+                actionKind: offer.action_kind,
+                constraints: JSON.parse(offer.constraints_json),
+              };
+            })
+        : [];
+    if (
+      new Set(replacementOffers.map(({ offer }) => offer))
+        .size !== replacementOffers.length
+    ) {
+      throw new Error("replacement Operator offer IDs must be unique");
+    }
     const receipt = {
       status: "accepted",
       requestId: request.requestId,
@@ -1714,15 +1788,16 @@ function durabilityRestorePrimary({
       candidate
         .prepare(
           `INSERT INTO recovery_activations
-             (request_id, request_digest, receipt_json,
+             (request_id, request_digest, receipt_json, replacement_offers_json,
               source_recovery_point, source_manifest_digest, restored_at,
               authority_epoch)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           request.requestId,
           requestDigest,
           canonicalJson(receipt),
+          canonicalJson(replacementOffers),
           selected.public.id,
           selected.generation.manifest.manifestDigest,
           restoredAt,
@@ -1749,7 +1824,7 @@ function durabilityRestorePrimary({
            WHERE consumed_revision IS NULL`,
         )
         .run();
-      if (before.run === null) {
+      for (const replacementOffer of replacementOffers) {
         candidate
           .prepare(
             `INSERT INTO operator_offers
@@ -1760,7 +1835,7 @@ function durabilityRestorePrimary({
           .run(
             replacementOffer.offer,
             replacementOffer.principal,
-            before.cursor.revision,
+            replacementOffer.revision,
             authorityEpoch,
             replacementOffer.actionKind,
             canonicalJson(replacementOffer.constraints),
@@ -1785,6 +1860,7 @@ function durabilityRestorePrimary({
       );
     }
     const verified = durabilityReadState(candidate);
+    durabilityVerifyRecoveryOfferRebindings(candidate);
     if (
       verified.authorityEpoch !== authorityEpoch ||
       canonicalJson(verified.cursor) !== canonicalJson(before.cursor) ||
@@ -2536,7 +2612,11 @@ function durabilityVerifyCommit(database, capsules, commitId, layout) {
     }
   }
   const createdOffers = state.offers
-    .filter((offer) => offer.revision === capsule.revision)
+    .filter(
+      (offer) =>
+        offer.revision === capsule.revision &&
+        offer.authorityEpoch === capsule.authorityEpoch,
+    )
     .map((offer) => ({
       offer: offer.offer,
       principal: offer.principal,
@@ -2573,6 +2653,7 @@ function durabilityRecoverAndVerify(
     }
 
     const state = durabilityReadState(database);
+    durabilityVerifyRecoveryOfferRebindings(database);
     if (state.cursor.revision === 0) {
       if (state.cursor.commitId !== DURABILITY_GENESIS_COMMIT_ID) {
         throw new Error("genesis projection has an invalid commit identity");

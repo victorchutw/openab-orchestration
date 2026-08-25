@@ -374,7 +374,11 @@ export function openRuntimeCore(rawOptions) {
             requestDigest,
             recoveryPointId: request.action.payload.recoveryPoint,
             restoredAt: options.clock(),
-            replacementOffer: postRestoreOffer,
+            replacementOfferId(actionKind) {
+              return actionKind === postRestoreOffer.actionKind
+                ? postRestoreOffer.offer
+                : options.identifiers.operatorOffer();
+            },
           });
           durability.close();
           durability = openDurability(durabilityOptions);

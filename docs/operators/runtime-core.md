@@ -161,9 +161,12 @@ reconstructs every referenced artifact from recovery CAS, and runs SQLite and
 domain integrity checks. The fully verified candidate, including its incremented
 authority epoch and durable Restore receipt, must reach the recovery boundary as
 a new generation before the database is atomically activated. Activation fences
-every capability from the earlier epoch. A failed activation leaves no
-authoritative database and can be retried only after the failure is observed and
-corrected.
+every capability from the earlier epoch. When no Effect Intent requires
+Reconciliation, each action that was legal at the restored cursor receives a
+fresh opaque offer bound to the new authority epoch; the Restore activation
+record durably binds and verifies that complete replacement set. A failed
+activation leaves no authoritative database and can be retried only after the
+failure is observed and corrected.
 
 The pre-activation generation does not make its accepted receipt externally
 final. A separate immutable completion record is written only after the atomic
